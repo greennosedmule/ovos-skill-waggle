@@ -57,11 +57,15 @@ Each handler builds its Android intent with a `waggle` builder, so the handlers 
 
 ### The pipeline stage
 
-The stage `waggle` goes near the front of the hub's pipeline, after `stop_high` and `converse` (so a skill's follow-up question, Waggle's own included, still gets its answer) and before every stage that could take a phone request, such as `adapt_high` and the alerts skill:
+The stage is an ovos-core 2.x pipeline plugin, `ovos-waggle-pipeline-plugin` (ovos-core 1.x can't load pipeline plugins). It goes near the front of the hub's pipeline, after the stop and converse stages (so a skill's follow-up question, Waggle's own included, still gets its answer) and before every stage that could take a phone request, such as Adapt, Padatious and the alerts skill:
 
 ```json
-"pipeline": ["stop_high", "converse", "waggle", "ocp_high", "padatious_high", "adapt_high", "…"]
+"pipeline": ["ovos-stop-pipeline-plugin-high", "ovos-converse-pipeline-plugin",
+             "ovos-waggle-pipeline-plugin-high", "ovos-ocp-pipeline-plugin-high",
+             "ovos-padatious-pipeline-plugin-high", "ovos-adapt-pipeline-plugin-high", "…"]
 ```
+
+Only the `-high` tier matches: the stage has one place in the pipeline, and its matches don't come in degrees (`-medium` and `-low` never match).
 
 It matches only when all of these hold, and otherwise returns no match, so the rest of the pipeline runs as if Waggle weren't installed:
 
@@ -69,9 +73,11 @@ It matches only when all of these hold, and otherwise returns no match, so the r
 2. **The utterance is a request it understands.** Matching is deliberately generous for phones in Waggle's domains (times, alarms, timers): a phrasing the stage misses would go on to the alerts skill and set a timer on the hub, which is the wrong place. A false match costs little, since the phone's rules and ask card still decide.
 3. **The phone would allow it,** by the WAGGLE.md rule matcher run on the cached capabilities. An intent the phone blocks (by a rule, or `unmatched: block` with no rule) isn't Waggle's to take: the user chose not to allow it on the phone, so the request goes on to the stock skills and is handled on the hub. A query the phone hasn't enabled is treated the same way. An `ask` rule matches; the phone asks.
 
-A match produces a `waggle:request` with `speak: true`.
+A match produces a `waggle:request` with `speak: true`. ovos-core emits a match as a reply to the utterance, so it arrives as the match type `waggle:utterance`, whose data is a `waggle:request`'s (`request`, `params`, `speak`) plus the utterance fields. The handler runs it exactly like a `waggle:request` and is registered with `is_intent=True`, so ovos-workshop emits `ovos.utterance.handled` once the outcome has been spoken; it goes to the phone, ending its turn. Plain `waggle:request`s never emit it, since whoever made the request (the persona, another skill) owns the utterance.
 
-Times and durations are parsed with ovos-utils' date and duration helpers in the **target phone's** timezone (from its `waggle.capabilities`), not the hub's. The phone receives plain numbers. Times the phone returns are UTC and are spoken in the phone's timezone.
+Matching is keywords and patterns, not an intent engine: a gate per domain ("timer", "alarm", "wake me", "my alarms", with set verbs and without cancel, snooze and the like), then durations through ovos-date-parser's `extract_duration` after rewriting the phrasings it misses ("an hour and a half", "a minute", "10 mins"), and clock times through patterns for "6:30 a.m.", "18:30", "half past six", "quarter to seven", "seven fifteen pm", "noon" and so on, with ovos-date-parser's `extract_datetime` as a last resort. When a.m. or p.m. isn't said, "wake me", "morning" and "tomorrow" mean a.m.; otherwise it's the next time the phone's clock shows that time. `SET_ALARM` has no date, so an alarm for another day ("Friday at 7", "every weekday") isn't taken; nor is "set a timer" or "set an alarm" without a length or time, which needs S3's follow-up question.
+
+Times and durations are computed in the **target phone's** timezone (from its `waggle.capabilities`; the hub's if it announced none), not the hub's. The phone receives plain numbers. Times the phone returns are UTC and are spoken in the phone's timezone.
 
 v1 ships English (`en-us`) locale files only.
 
@@ -81,7 +87,7 @@ Each request goes back to the client that asked, and the outcome is reported onl
 
 1. **Capability check:** the capability cache holds each phone's latest `waggle.capabilities`, keyed by its HiveMind client rather than its connection, which changes on every reconnect. The handler runs the WAGGLE.md rule matcher again (a request may come from somewhere other than the pipeline stage). If the intent would be blocked, or the query isn't enabled, it reports that and stops.
 2. **Lookups:** requests that need phone data (a contact's number, an app's package) send `waggle.query` first and build the intent from the result. Several matches lead to a "which one?" follow-up (see below).
-3. **Send:** the handler emits `waggle.intent` with a new request `id` and a short `description`, as a reply to the original message, so HiveMind's message context routes it to the same peer.
+3. **Send:** the handler emits `waggle.intent` with a new request `id` and a short `description`, as a reply to the original message, so HiveMind's message context routes it to the same peer. HiveMind delivers a bus message to every client whose peer is in its `destination`. ovos-core's match message is already a reply to the utterance (its `destination` is the peer), so replying to it again would go back to `skills`; the handler first turns the request message into a stand-in for the phone's own message (`source` the peer), so replies, spoken outcomes included, reach the phone either way.
 4. **Wait:** for the response with the matching `id`. The wait is `response_timeout_s` for `run` rules and `ask_timeout_s` from the phone's capabilities plus `ask_margin_s` for `ask` rules.
 5. **Report:** an outcome per result, spoken as a dialog when `speak` is true and always returned in `waggle:request.response`. Success gets the confirmation; `declined` gets "Okay, cancelled"; `blocked`, `no_handler`, `launch_failed` and `permission_denied` each get a plain-words explanation; a phone-side `timeout` gets "You didn't confirm on your phone"; no response at all gets "I couldn't reach your phone."
 
@@ -102,7 +108,8 @@ Requests the stage can't parse, such as compound ones ("text Jenny I'm running l
 ## Hub setup
 
 - hivemind-core must let the phone's client key send `waggle.capabilities`, `waggle.intent.response` and `waggle.query.response` (its allowed message types), one `allow-msg` per type. The install docs will list the exact commands.
-- The `waggle` stage goes into the pipeline in the hub's `mycroft.conf` (`intents.pipeline`), after `converse`. Sessions carry their pipeline, and a client that sends one back overrides the hub's: Wiggins echoes the session it was given, so a session started before the change keeps the old pipeline until it ends (30 minutes idle, or Clear conversation).
+- The hub needs ovos-core 2.x (tested with 2.1.1, ovos-plugin-manager 2.2.0, ovos-workshop 7.0.6, ovos-bus-client 1.5.0, ovos-date-parser 0.29.0); 1.x can't load pipeline plugins. Install the package into ovos-core's environment (`pip install ovos-skill-waggle`, or the git URL), which registers the `opm.pipeline` entry point `ovos-waggle-pipeline-plugin`; nothing goes in the skills directory.
+- Add `"ovos-waggle-pipeline-plugin-high"` to `intents.pipeline` in the hub's `mycroft.conf`, right after `"ovos-converse-pipeline-plugin"` (see "The pipeline stage"), and restart ovos-core. Settings go in `intents` → `ovos-waggle-pipeline-plugin` (see "Fallbacks and configuration"). Sessions carry their pipeline, and a client that sends one back overrides the hub's: Wiggins echoes the session it was given, so a session started before the change keeps the old pipeline until it ends (30 minutes idle, or Clear conversation).
 - The package otherwise only listens on and emits to the OVOS bus.
 
 ## Fallbacks and configuration
@@ -113,14 +120,14 @@ Requests the stage can't parse, such as compound ones ("text Jenny I'm running l
 - **Different apps on different phones:** intents are implicit (no package) unless the user configures one, so whatever app the phone has as its default answers.
 - **Phone connected only while its UI is open:** Wiggins is usually connected only during an interaction, so "default phone peer" requests mostly fail with "your phone isn't connected" until push wake-up exists (see Milestones).
 
-Settings (`settings.json`):
+Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` → `ovos-waggle-pipeline-plugin` (where ovos-core's `OVOSPipelineFactory` reads a pipeline plugin's config). Per-request keys spell the request with underscores for dots, e.g. `enable_timer_set`, `package_alarm_set`.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `response_timeout_s` | 5 | Wait for `run` intents and queries |
 | `ask_margin_s` | 5 | Added to the phone's `ask_timeout_s` for `ask` intents |
 | `default_phone_peer` | none | HiveMind client to use when a non-phone satellite asks (S4) |
-| `enable_<request>` | true | Per-request enable flags; a disabled request is never matched or handled |
+| `enable_<request>` | true | Per-request enable flags; a disabled request is never matched, and a `waggle:request` for it is answered `blocked` without contacting the phone |
 | `package_<request>` | none | Optional package override per request |
 
 ## Testing
@@ -128,6 +135,7 @@ Settings (`settings.json`):
 - **Library:** unit tests for message validation, the rule matcher (including the specificity and tie-break cases in WAGGLE.md) and every intent builder. The matcher cases are data, in `waggle/testdata/rule_cases.json`, so Wiggins' Kotlin matcher runs the same ones.
 - **Wiggins:** `waggle-fake-hub --host <bus host>` connects to the OVOS messagebus that hivemind-core uses, waits for the phone's `waggle.capabilities`, and sends a scripted set of requests (built-in, or `--script` with a JSON list of steps), printing PASS or FAIL for each. It exits 0 only if every step passed.
 - **Pipeline stage:** no match without capabilities, with an unsupported `version`, or when the phone blocks the action; a match for an `ask` rule; utterance-to-request cases for each request, including phrasings the alerts skill would otherwise take.
+- **Pipeline end to end:** ovos-core's real `IntentService` on a `FakeBus`, loading the plugin from its entry point with a padacioso intent standing in for the alerts skill: an utterance from the Waggle phone reaches the fake phone; the same utterance from another satellite, or one the phone blocks, falls through.
 - **Handlers:** each request with the fake phone, covering each outcome in the flow above, including timeouts, `speak: false`, and the follow-up question.
 - **End to end:** a local hivemind-core with the fake phone connected as a real HiveMind client, run by hand before releases.
 
@@ -142,9 +150,9 @@ Settings (`settings.json`):
 
 - [x] Does the OVOS persona/LLM fallback need a hint to hand phone requests to this skill instead of answering them itself? Yes, as tool use in the hub's Claude solver, making `waggle:request`s (see "The persona", S4). Decided 2026-10-06.
 - [x] "Set a timer" also matches the stock OVOS timer skill. How should the two divide utterances? By who's speaking: a request spoken to a Waggle phone is for the phone, so the `waggle` stage takes it ahead of the alerts skill; every other satellite never reaches Waggle. Decided 2026-10-06.
-- [ ] The pipeline plugin API in the hub's ovos-core (1.3.1): how a stage returns a match, how its `match_type` reaches the handler, and the stage name it registers. The hub's `ovos-persona-pipeline-plugin-low` stage is a working example.
-- [ ] Matching engine for the stage: Padacioso (as OCP and the persona use) or keywords, and how generous it can be without taking non-requests.
-- [ ] Can the handlers ask a follow-up with `get_response` from a bus event handler rather than an intent handler?
-- [ ] How does a handler read the sender's HiveMind client from a message's context, to key the capability cache? HiveMind's peer id has the form `<useragent>::<client id>::<client name>::<session id>` (Wiggins' `docs/hivemind-protocol.md` §11.2); the client id (from `add-client`) is stable across reconnects, the session id isn't.
-- [ ] Can a skill address a specific HiveMind peer (for `default_phone_peer`), or only reply to the one that spoke? Ask in the HiveMind Matrix room.
+- [x] The pipeline plugin API. It needs ovos-core 2.x; 1.3.1 can't load pipeline plugins, so S2 targets ovos-core 2.1.1. A plugin is an OPM `ConfidenceMatcherPipeline(bus, config)` registered under the `opm.pipeline` entry-point group; `match_high/medium/low(utterances, lang, message)` return an `IntentHandlerMatch(match_type, match_data, skill_id, utterance)` or None, and the pipeline names a tier as `<plugin id>-high|-medium|-low`. ovos-core's `IntentService` emits the match as `message.reply(match_type, {**message.data, **match_data, "utterance", "lang"})` with `skill_id` and the session in the context, after `{skill_id}.activate`. The plugin is also an `OVOSAbstractApplication`, like ovos-persona's `PersonaService`, and handles its own match type with `add_event(..., is_intent=True)`, which emits `ovos.utterance.handled`. Decided 2026-10-07.
+- [x] Matching engine: keywords and patterns, with ovos-date-parser for durations and times (see "The pipeline stage"). No intent engine is needed for three requests; the domain gates keep it from taking non-requests, and the rules still decide. Decided 2026-10-07.
+- [x] Can the handlers ask a follow-up with `get_response` from a bus event handler? Yes, by ovos-workshop 7.0.6's source: `get_response` finds the triggering message with `dig_for_message`, so it works in any handler running for a message, and ovos-core activates the skill on a match, which converse needs. First exercised in S3. Decided 2026-10-07.
+- [x] How does a handler read the sender's HiveMind client? hivemind-core sets `context["peer"]` and `context["source"]` to the client's peer id, `<useragent>::<client id>::<client name>::<session id>`, on every message it injects; replies swap `source` but keep `peer`. The cache is keyed by the client id (the second field), which is stable across sessions, and keeps the latest full peer for addressing. Decided 2026-10-07.
+- [ ] Can a skill address a specific HiveMind peer (for `default_phone_peer`), or only reply to the one that spoke? From the source (hivemind-ovos-agent-plugin 0.1.0), any bus message whose `destination` includes a connected peer is delivered to it, and `hive.send.downstream {msg_type, payload, peer}` sends to one; both untested on the hub. To confirm in S4.
 - [ ] Should calendar reads stay hub-side through CalDAV when available, using `waggle.query` only as a fallback? The `calendar.next` result shape is iCalendar-based so either source fits.
