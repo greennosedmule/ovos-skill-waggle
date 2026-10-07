@@ -37,7 +37,7 @@ include = ["waggle*", "ovos_skill_waggle*"]
 
 [tool.setuptools.package-data]
 waggle = ["testdata/*.json"]
-ovos_skill_waggle = ["locale/*/*.dialog"]
+ovos_skill_waggle = ["locale/*/*.dialog", "locale/*/*.voc"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
