@@ -232,7 +232,7 @@ def test_call_the_only_number(bus, recorder, full_phone, script):
 def test_which_contact(bus, recorder, full_phone, script):
     s = script("Ortiz")
     response = run(bus, recorder, "contact.call", {"name": "sam"})
-    assert s.asked[0][:2] == ("which_contact", {"name": "sam", "options": "Sam Lee or Sam Ortiz"})
+    assert s.asked[0][:2] == ("which_contact", {"name": "Sam", "options": "Sam Lee or Sam Ortiz"})
     assert response.summary == "Dialing Sam Ortiz. Tap call to connect."
     assert sent(recorder)[0]["data"] == "tel:+15550004444"
 

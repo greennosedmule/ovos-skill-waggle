@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovos-skill-waggle"
-version = "0.3.0"
+version = "0.3.1"
 description = "Waggle: phone actions for OVOS over HiveMind"
 readme = "SPEC.md"
 license = "Apache-2.0"

@@ -108,6 +108,11 @@ def spoken_duration(seconds: int) -> str:
     return f"{', '.join(words[:-1])} and {words[-1]}"
 
 
+def as_name(said: str) -> str:
+    """A name as parsed ("sam", "sam lee") written as a name, unless it already has capitals."""
+    return said if said != said.lower() else said.title()
+
+
 def spoken_choices(options: list[str]) -> str:
     """ "A or B", "A, B or C"."""
     if len(options) <= 1:
@@ -415,7 +420,7 @@ class RequestHandlers:
             raise _Stop(Outcome.failure(ErrorCode.NO_HANDLER.value, "contact_not_found",
                                         name=name))
         contact: Contact = self._pick_by_name(origin, contacts, name, lambda c: c.fn,
-                                              "which_contact", {"name": name})
+                                              "which_contact", {"name": as_name(name)})
         return contact.fn, self._pick_number(origin, contact, request.params.get("type"),
                                              texting)
 

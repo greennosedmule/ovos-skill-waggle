@@ -40,6 +40,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 from ovos_bus_client.client import MessageBusClient
 from ovos_bus_client.message import Message
+from ovos_bus_client.session import SessionManager
 from ovos_config.config import Configuration
 from ovos_plugin_manager.templates.pipeline import ConfidenceMatcherPipeline, IntentHandlerMatch
 from ovos_utils.fakebus import FakeBus
@@ -54,9 +55,9 @@ from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
 from ovos_skill_waggle.handlers import RequestHandlers, phone_origin
 from ovos_skill_waggle.parsing import (
     MISSING_BODY, MISSING_DURATION, MISSING_TIME, Parsed, answer_alarm_time, answer_duration,
-    parse_utterance,
+    original_wording, parse_utterance,
 )
-from ovos_skill_waggle.requests import REQUEST, WaggleRequest
+from ovos_skill_waggle.requests import MESSAGE_COMPOSE, REQUEST, WaggleRequest
 from ovos_skill_waggle.settings import Settings
 
 PLUGIN_ID = "ovos-waggle-pipeline-plugin"
@@ -172,6 +173,12 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
             parsed = self.parse(utterance, lang, phone)
             if parsed is None:
                 continue
+            if parsed.request == MESSAGE_COMPOSE:
+                # The message as said, not as ovos-core's normalizer rewrote it.
+                said = self.parse(original_wording(utterance, utterances), lang, phone)
+                if (said is not None and said.request == MESSAGE_COMPOSE
+                        and said.params.get("name") == parsed.params.get("name")):
+                    parsed, utterance = said, original_wording(utterance, utterances)
             if parsed.check_app and not self.apps.has_app(phone.client_id, parsed.params["name"]):
                 continue  # "open the garage door": not an app on this phone
             if not self.would_allow(phone, parsed):
@@ -232,7 +239,23 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         the question to the phone, which sends it back with the answer.
         """
         to_phone = origin.reply(origin.msg_type, origin.data)
-        return self.get_response(dialog, data, num_retries=1, message=to_phone, wait=False)
+        session_id = SessionManager.get(to_phone).session_id
+        heard: list = []
+
+        def on_answer(message: Message) -> None:
+            # get_response returns only the first utterance, which ovos-core's normalizer
+            # rewrote; keep them all to recover the answer as said.
+            if SessionManager.get(message).session_id == session_id:
+                heard[:] = message.data.get("utterances") or []
+
+        event = f"{self.skill_id}.converse.get_response"
+        self.bus.on(event, on_answer)
+        try:
+            answer = self.get_response(dialog, data, num_retries=1, message=to_phone,
+                                       wait=False)
+        finally:
+            self.bus.remove(event, on_answer)
+        return None if answer is None else original_wording(answer, heard)
 
     def _render(self, dialog: str, data: dict) -> str:
         return self.dialog_renderer.render(dialog, data)

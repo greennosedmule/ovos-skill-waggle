@@ -150,3 +150,48 @@ def test_follow_up_question_through_converse(bus, recorder, service, make_phone)
     assert intents[0]["extras"]["android.intent.extra.alarm.LENGTH"]["value"] == 600
     assert recorder.of(ALERTS_TIMER) == []
     assert [m.data["utterance"] for m in recorder.of("speak")][-1] == "Timer set for 10 minutes."
+
+
+def _wait_for_question(recorder, timeout=5.0):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        question = next((m for m in recorder.of("speak") if m.data.get("expect_response")), None)
+        if question is not None:
+            return question
+        time.sleep(0.05)
+    raise AssertionError(recorder.types())
+
+
+def test_message_body_keeps_the_wording_as_said(bus, recorder, service, make_phone):
+    """ovos-core's normalizer sends its rewrite first; the text keeps the original."""
+    import threading
+
+    phone = make_phone(contacts=[{"fn": "Mom", "tel": [{"value": "+15550001111", "type": "cell"}]}],
+                       ask_answer="accept")
+    recorder.clear()
+    first = threading.Thread(target=say, args=(bus, "text mom", PEER), daemon=True)
+    first.start()
+    question = _wait_for_question(recorder)
+    assert question.data["utterance"] == "What should the message say?"
+    bus.emit(Message("recognizer_loop:utterance",
+                     {"utterances": ["I am running late , start without me",
+                                     "I'm running late, start without me!"], "lang": "en-US"},
+                     {"source": PEER, "peer": PEER, "destination": "skills",
+                      "session": question.context["session"]}))
+    first.join(10)
+    intents = [e.request.data for e in phone.log if "action" in e.request.data]
+    assert intents[0]["extras"]["sms_body"]["value"] == "I'm running late, start without me!"
+
+
+def test_inline_message_body_keeps_the_wording_as_said(bus, recorder, service, make_phone):
+    phone = make_phone(contacts=[{"fn": "Mom", "tel": [{"value": "+15550001111", "type": "cell"}]}])
+    recorder.clear()
+    session = Session(f"session-of-{PEER}", pipeline=PIPELINE)
+    bus.emit(Message("recognizer_loop:utterance",
+                     {"utterances": ["text mom saying I am late , sorry",
+                                     "text Mom saying I'm late, sorry!"], "lang": "en-US"},
+                     {"source": PEER, "peer": PEER, "destination": "skills",
+                      "session": session.serialize()}))
+    intents = [e.request.data for e in phone.log if "action" in e.request.data]
+    assert intents[0]["extras"]["sms_body"]["value"] == "I'm late, sorry!"

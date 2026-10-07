@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -672,3 +673,26 @@ def choose(answer: str, options: list[str],
     hits = [i for i, o in enumerate(folded) if words and all(re.search(rf"\b{re.escape(w)}\b", o)
                                                              for w in words)]
     return hits[0] if len(hits) == 1 else None
+
+
+# --- the words as said -------------------------------------------------------
+
+def original_wording(chosen: str, utterances: Optional[list[str]]) -> str:
+    """The wording ``chosen`` came from, if ``utterances`` has it, else ``chosen``.
+
+    ovos-core's utterance normalizer puts its version of each transcription
+    first and the original right after it: "I am running late , start without
+    me", then "I'm running late, start without me". Matching uses either, but a
+    text message should keep what was said. The next utterance counts as the
+    original only if it reads nearly the same.
+    """
+    if not utterances or chosen not in utterances:
+        return chosen
+    i = utterances.index(chosen)
+    if i + 1 >= len(utterances):
+        return chosen
+    candidate = utterances[i + 1]
+    loose = [re.sub(r"[^a-z0-9]", "", s.lower()) for s in (chosen, candidate)]
+    if candidate != chosen and SequenceMatcher(None, *loose).ratio() >= 0.8:
+        return candidate
+    return chosen
