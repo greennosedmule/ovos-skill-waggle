@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovos-skill-waggle"
+version = "0.1.0"
+description = "Waggle: phone actions for OVOS over HiveMind"
+readme = "SPEC.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "ovos-bus-client>=1.0",
+    "ovos-utils>=0.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+waggle-fake-hub = "waggle.fake_hub:main"
+
+[tool.setuptools.packages.find]
+include = ["waggle*", "ovos_skill_waggle*"]
+
+[tool.setuptools.package-data]
+waggle = ["testdata/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -125,7 +125,8 @@ Settings (`settings.json`):
 
 ## Testing
 
-- **Library:** unit tests for message validation, the rule matcher (including the specificity and tie-break cases in WAGGLE.md) and every intent builder.
+- **Library:** unit tests for message validation, the rule matcher (including the specificity and tie-break cases in WAGGLE.md) and every intent builder. The matcher cases are data, in `waggle/testdata/rule_cases.json`, so Wiggins' Kotlin matcher runs the same ones.
+- **Wiggins:** `waggle-fake-hub --host <bus host>` connects to the OVOS messagebus that hivemind-core uses, waits for the phone's `waggle.capabilities`, and sends a scripted set of requests (built-in, or `--script` with a JSON list of steps), printing PASS or FAIL for each. It exits 0 only if every step passed.
 - **Pipeline stage:** no match without capabilities, with an unsupported `version`, or when the phone blocks the action; a match for an `ask` rule; utterance-to-request cases for each request, including phrasings the alerts skill would otherwise take.
 - **Handlers:** each request with the fake phone, covering each outcome in the flow above, including timeouts, `speak: false`, and the follow-up question.
 - **End to end:** a local hivemind-core with the fake phone connected as a real HiveMind client, run by hand before releases.

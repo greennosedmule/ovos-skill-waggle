@@ -1,0 +1,532 @@
+{
+  "description": "Waggle v1 rule-matching cases (WAGGLE.md, 'Rule matching'), shared by the waggle Python library and the Wiggins Android client so both matchers agree. Each case gives the phone's rules (WAGGLE.md rule objects, as in waggle.capabilities), an optional 'unmatched' mode ('block' or 'ask'; absent means the WAGGLE.md default, 'block'), and the data of a waggle.intent. 'expect.mode' is the decision; 'expect.rule' is the 0-based index into 'rules' of the rule that decided, or null when no rule matched and 'unmatched' applied. No case has two rules that tie on both specificity and mode, so the deciding rule is unique.",
+  "version": 1,
+  "cases": [
+    {
+      "name": "exact action match",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "action mismatch falls to unmatched block",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_TIMER"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "no rules, unmatched block",
+      "rules": [],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "no rules, unmatched ask",
+      "rules": [],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "ask", "rule": null}
+    },
+    {
+      "name": "no rules, unmatched absent defaults to block",
+      "rules": [],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "no matching rule, unmatched ask",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "ask", "rule": null}
+    },
+    {
+      "name": "action comparison is case-sensitive",
+      "rules": [
+        {"action": "android.intent.action.set_alarm", "mode": "run"}
+      ],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "ask", "rule": null}
+    },
+    {
+      "name": "matching block rule overrides unmatched ask",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"}
+      ],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "matching run rule ignores unmatched ask",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "scheme matches",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "ask", "rule": 0}
+    },
+    {
+      "name": "scheme does not match",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "geo:0,0?q=coffee"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "uppercase data scheme matches lowercase rule scheme",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "TEL:+15551234567"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "uppercase rule scheme matches lowercase data scheme",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "TEL", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "mixed-case schemes match",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "HtTpS", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "hTTpS://example.com/"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "scheme rule does not match an intent without data",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "scheme rule does not match an intent with only a mime_type",
+      "rules": [
+        {"action": "android.intent.action.SEND", "scheme": "mailto", "mode": "run"}
+      ],
+      "unmatched": "ask",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SEND", "mime_type": "text/plain"},
+      "expect": {"mode": "ask", "rule": null}
+    },
+    {
+      "name": "intent without data falls back to the action-only rule",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL"},
+      "expect": {"mode": "ask", "rule": 1}
+    },
+    {
+      "name": "package matches",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "org.mozilla.firefox"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "package does not match",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "com.android.chrome"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "package rule does not match an intent without package",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "non-matching package rule loses to action-only rule (general first)",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "mode": "ask"},
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "com.android.chrome"},
+      "expect": {"mode": "ask", "rule": 0}
+    },
+    {
+      "name": "non-matching package rule loses to action-only rule (specific first)",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "run"},
+        {"action": "android.intent.action.VIEW", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "com.android.chrome"},
+      "expect": {"mode": "ask", "rule": 1}
+    },
+    {
+      "name": "category matches the only intent category",
+      "rules": [
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "categories": ["android.intent.category.LAUNCHER"]},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "category matches one of several intent categories",
+      "rules": [
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "categories": ["android.intent.category.DEFAULT", "android.intent.category.LAUNCHER", "android.intent.category.BROWSABLE"]},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "category not among intent categories",
+      "rules": [
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "categories": ["android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"]},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "category rule does not match an intent without categories",
+      "rules": [
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "package": "app.grapheneos.camera"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "action+scheme block beats action run (general first)",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "block", "rule": 1}
+    },
+    {
+      "name": "action+scheme block beats action run (specific first)",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "block"},
+        {"action": "android.intent.action.DIAL", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "action+scheme run beats action block (general first)",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "mode": "block"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "run", "rule": 1}
+    },
+    {
+      "name": "action+scheme run beats action block (specific first)",
+      "rules": [
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "more specific block beats less specific ask",
+      "rules": [
+        {"action": "android.intent.action.SENDTO", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SENDTO", "data": "smsto:+15551234567"},
+      "expect": {"mode": "block", "rule": 1}
+    },
+    {
+      "name": "more specific ask beats less specific block",
+      "rules": [
+        {"action": "android.intent.action.SENDTO", "mode": "block"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SENDTO", "data": "smsto:+15551234567"},
+      "expect": {"mode": "ask", "rule": 1}
+    },
+    {
+      "name": "3-field run beats 2-field block",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "package": "org.mozilla.firefox", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "org.mozilla.firefox"},
+      "expect": {"mode": "run", "rule": 1}
+    },
+    {
+      "name": "3-field block beats 2-field run",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "https", "package": "org.mozilla.firefox", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "org.mozilla.firefox"},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "4-field run beats 3-field block and 1-field block",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "package": "org.mozilla.firefox", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "package": "org.mozilla.firefox", "category": "android.intent.category.BROWSABLE", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "org.mozilla.firefox", "categories": ["android.intent.category.BROWSABLE"]},
+      "expect": {"mode": "run", "rule": 2}
+    },
+    {
+      "name": "3-field rule that does not match loses to 2-field rule",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "https", "package": "org.mozilla.firefox", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "com.android.chrome"},
+      "expect": {"mode": "run", "rule": 1}
+    },
+    {
+      "name": "tie: block beats ask (block listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "tie: block beats ask (ask listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 1}
+    },
+    {
+      "name": "tie: block beats run (block listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "tie: block beats run (run listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 1}
+    },
+    {
+      "name": "tie: ask beats run (ask listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "ask", "rule": 0}
+    },
+    {
+      "name": "tie: ask beats run (run listed first)",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "ask", "rule": 1}
+    },
+    {
+      "name": "tie: block wins among run, ask, block",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 2}
+    },
+    {
+      "name": "tie: block wins among ask, block, run",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "ask"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "block"},
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM"},
+      "expect": {"mode": "block", "rule": 1}
+    },
+    {
+      "name": "tie at 2 fields across different fields: ask (package) beats run (scheme)",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "run"},
+        {"action": "android.intent.action.VIEW", "package": "org.mozilla.firefox", "mode": "ask"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "package": "org.mozilla.firefox"},
+      "expect": {"mode": "ask", "rule": 1}
+    },
+    {
+      "name": "tie at 2 fields across different fields: block (category) beats run (scheme)",
+      "rules": [
+        {"action": "android.intent.action.VIEW", "category": "android.intent.category.BROWSABLE", "mode": "block"},
+        {"action": "android.intent.action.VIEW", "scheme": "https", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/", "categories": ["android.intent.category.BROWSABLE"]},
+      "expect": {"mode": "block", "rule": 0}
+    },
+    {
+      "name": "WAGGLE.md example: SET_ALARM runs",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_ALARM", "description": "Set an alarm for 6:30 AM", "extras": {"android.intent.extra.alarm.HOUR": {"type": "int", "value": 6}, "android.intent.extra.alarm.MINUTES": {"type": "int", "value": 30}, "android.intent.extra.alarm.SKIP_UI": {"type": "bool", "value": true}}},
+      "expect": {"mode": "run", "rule": 0}
+    },
+    {
+      "name": "WAGGLE.md example: SET_TIMER runs",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SET_TIMER"},
+      "expect": {"mode": "run", "rule": 1}
+    },
+    {
+      "name": "WAGGLE.md example: DIAL tel: asks",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL", "data": "tel:+15551234567"},
+      "expect": {"mode": "ask", "rule": 3}
+    },
+    {
+      "name": "WAGGLE.md example: SENDTO smsto: asks",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SENDTO", "data": "smsto:+15551234567"},
+      "expect": {"mode": "ask", "rule": 4}
+    },
+    {
+      "name": "WAGGLE.md example: SENDTO SMSTO: (uppercase) asks",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SENDTO", "data": "SMSTO:+15551234567"},
+      "expect": {"mode": "ask", "rule": 4}
+    },
+    {
+      "name": "WAGGLE.md example: MAIN+LAUNCHER with a package runs",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "categories": ["android.intent.category.LAUNCHER"], "package": "app.grapheneos.camera"},
+      "expect": {"mode": "run", "rule": 2}
+    },
+    {
+      "name": "WAGGLE.md example: VIEW https: is unmatched",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.VIEW", "data": "https://example.com/"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "WAGGLE.md example: MAIN without LAUNCHER is unmatched",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.MAIN", "package": "app.grapheneos.camera"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "WAGGLE.md example: DIAL without data is unmatched",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.DIAL"},
+      "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "WAGGLE.md example: SENDTO mailto: is unmatched",
+      "rules": [
+        {"action": "android.intent.action.SET_ALARM", "mode": "run"},
+        {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+        {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
+        {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
+        {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+      ],
+      "unmatched": "block",
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "android.intent.action.SENDTO", "data": "mailto:a@example.com"},
+      "expect": {"mode": "block", "rule": null}
+    }
+  ]
+}

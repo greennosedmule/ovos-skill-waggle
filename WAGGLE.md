@@ -1,6 +1,6 @@
 # Waggle Protocol — v1
 
-Oct 4, 2026 · @greennosedmule
+Oct 4, 2026 · @greennosedmule · **Frozen as v1** on Oct 6, 2026: changes follow "Versioning" below.
 
 ## Purpose and scope
 
@@ -55,6 +55,7 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
   "rules": [
     {"action": "android.intent.action.SET_ALARM", "mode": "run"},
     {"action": "android.intent.action.SET_TIMER", "mode": "run"},
+    {"action": "android.intent.action.SHOW_ALARMS", "mode": "run"},
     {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
     {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
     {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
@@ -73,7 +74,7 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 
 The phone and the hub's pre-check both evaluate rules this way:
 
-1. A rule has an `action` (required) and optionally a `scheme` (the data URI's scheme), a `package` and a `category`. A rule matches an intent when every field the rule sets equals the intent's value. A rule's `category` matches if it appears in the intent's `categories`.
+1. A rule has an `action` (required) and optionally a `scheme` (the data URI's scheme), a `package` and a `category`. A rule matches an intent when every field the rule sets equals the intent's value. A rule's `category` matches if it appears in the intent's `categories`. Schemes compare case-insensitively, as in RFC 3986, here and in the forbidden-scheme check.
 2. Of the matching rules, the one with the most fields set wins. On a tie, the stricter mode wins: `block` over `ask` over `run`.
 3. If no rule matches, the phone's `unmatched` mode applies.
 
