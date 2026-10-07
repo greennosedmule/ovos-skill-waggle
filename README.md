@@ -5,7 +5,9 @@ Phone actions for [OpenVoiceOS](https://openvoiceos.org) over [HiveMind](https:/
 - [WAGGLE.md](WAGGLE.md): the protocol, v1.
 - [SPEC.md](SPEC.md): this package: the `waggle` library, the pipeline stage and the request handlers.
 
-Status: **S2**. Alarms, timers and "show alarms" work; contacts, apps and calendar (S3) and the LLM persona's hand-off (S4) are next.
+Status: **S3**. Alarms, timers, "show alarms", calendar questions ("what's my next appointment"), opening apps, calls and texts work, with follow-up questions ("For how long?", "Which Sam: Sam Lee or Sam Ortiz?"). The LLM persona's hand-off (S4) is next.
+
+The phone decides what it shares: contacts, calendar and the app list are read only if the user enables those queries on the phone, and calls and texts open the dialer or messaging app for the user to tap, never placing or sending anything.
 
 ## Install on a hub
 

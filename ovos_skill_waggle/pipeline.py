@@ -22,8 +22,15 @@ registered with ``is_intent=True`` so ovos-workshop emits
 ``waggle:request`` messages (the persona's tool calls, other skills) are
 handled without it, because whoever made them owns the utterance.
 
+A request said without everything it needs ("set a timer", "text Mom")
+matches with ``missing`` set in its data. Its handler asks for the rest with
+``get_response`` (the converse stage hands the answer back), reads the answer
+here, since only the stage parses language, and then runs the request.
+
 The stage must stay fast, since every utterance passes through it: a dict
 lookup for the peer, then regexes and the date parser, and only for phones.
+"Open X" without the word "app" also checks the phone's app names, which
+:class:`~ovos_skill_waggle.apps.AppCatalog` fetched in the background.
 """
 from __future__ import annotations
 
@@ -39,13 +46,16 @@ from ovos_utils.fakebus import FakeBus
 from ovos_utils.log import LOG
 from ovos_workshop.app import OVOSAbstractApplication
 
-from waggle.messages import CAPABILITIES
-from waggle.rules import decide_for
+from waggle.messages import CAPABILITIES, WaggleError
 
-from ovos_skill_waggle.actions import SUPPORTED_REQUESTS, build_intent
+from ovos_skill_waggle.actions import phone_allows
+from ovos_skill_waggle.apps import AppCatalog
 from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
-from ovos_skill_waggle.handlers import RequestHandlers
-from ovos_skill_waggle.parsing import parse_request
+from ovos_skill_waggle.handlers import RequestHandlers, phone_origin
+from ovos_skill_waggle.parsing import (
+    MISSING_BODY, MISSING_DURATION, MISSING_TIME, Parsed, answer_alarm_time, answer_duration,
+    parse_utterance,
+)
 from ovos_skill_waggle.requests import REQUEST, WaggleRequest
 from ovos_skill_waggle.settings import Settings
 
@@ -54,9 +64,18 @@ SKILL_ID = "ovos-skill-waggle.greennosedmule"
 # The match type ovos-core emits for a request the stage parsed from an utterance.
 UTTERANCE_REQUEST = "waggle:utterance"
 
+# The question for each missing piece, and stand-ins that let the rule check run without it.
+ASK_DIALOGS = {MISSING_DURATION: "ask_duration", MISSING_TIME: "ask_time",
+               MISSING_BODY: "ask_body"}
+PLACEHOLDERS = {MISSING_DURATION: {"seconds": 60}, MISSING_TIME: {"hour": 7, "minute": 0},
+                MISSING_BODY: {"body": "-"}}
+
 
 class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
     """The Waggle stage, request handlers and capability cache, in one plugin."""
+
+    # Fetch app lists in a thread; tests turn it off to keep the bus traffic in order.
+    fetch_apps_in_background = True
 
     def __init__(self, bus: Optional[Union[MessageBusClient, FakeBus]] = None,
                  config: Optional[Dict] = None):
@@ -70,9 +89,11 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         self.capabilities = CapabilityCache()
         # The current time in UTC; tests replace it.
         self.clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+        self.apps = AppCatalog(self.bus, lambda: self.waggle_settings.response_timeout_s)
         self.handlers = RequestHandlers(self.bus, self.capabilities,
                                         lambda: self.waggle_settings,
-                                        self._render, self._speak)
+                                        self._render, self._speak, ask=self._ask,
+                                        clock=lambda: self.clock())
         self.add_event(CAPABILITIES, self.handle_capabilities, speak_errors=False)
         self.add_event(REQUEST, self.handle_request, speak_errors=False)
         # is_intent: ovos-workshop emits ovos.utterance.handled when the handler returns.
@@ -82,13 +103,62 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
     # --- bus events ----------------------------------------------------------
 
     def handle_capabilities(self, message: Message) -> None:
-        self.capabilities.update(message)
+        phone = self.capabilities.update(message)
+        if phone is not None:
+            self.apps.refresh(phone, phone_origin(message, phone.peer),
+                              wait=not self.fetch_apps_in_background)
 
     def handle_request(self, message: Message) -> None:
         self.handlers.handle(message)
 
     def handle_utterance_request(self, message: Message) -> None:
+        data = message.data if isinstance(message.data, dict) else {}
+        missing = data.get("missing")
+        if missing is not None:
+            params = self.ask_for_missing(message, missing)
+            if params is None:
+                return  # the user didn't say; why has been spoken
+            data = {k: v for k, v in data.items() if k != "missing"}
+            message = Message(message.msg_type, {**data, "params": params}, message.context)
         self.handlers.handle(message)
+
+    def ask_for_missing(self, message: Message, missing: str) -> Optional[dict]:
+        """Ask for what the request lacks; its params with the answer, or None."""
+        data = message.data
+        peer = peer_of(message)
+        origin = phone_origin(message, peer) if peer else message
+        params = dict(data.get("params") or {})
+        dialog = ASK_DIALOGS.get(missing)
+        if dialog is None:
+            LOG.warning(f"Waggle: can't ask for {missing!r}")
+            return None
+        phone = self.capabilities.get(peer)
+        for attempt in range(2):
+            answer = self._ask(origin, dialog, {})
+            if answer is None:
+                self._speak(origin, self._render("declined", {}), "declined", {})
+                return None
+            value = self.read_answer(missing, answer, data.get("utterance") or "", phone)
+            if value is not None:
+                return {**params, **value}
+            if attempt == 0:
+                self._speak(origin, self._render("not_understood", {}), "not_understood", {})
+        self._speak(origin, self._render("declined", {}), "declined", {})
+        return None
+
+    def read_answer(self, missing: str, answer: str, asked: str,
+                    phone: Optional[Phone]) -> Optional[dict]:
+        """The params an answer to the follow-up question gives, or None."""
+        if missing == MISSING_DURATION:
+            seconds = answer_duration(answer)
+            return {"seconds": seconds} if seconds else None
+        if missing == MISSING_TIME:
+            when = answer_alarm_time(asked, answer, self.phone_now(phone))
+            return {"hour": when[0], "minute": when[1]} if when else None
+        if missing == MISSING_BODY:
+            body = answer.strip()
+            return {"body": body} if body else None
+        return None
 
     # --- matching ------------------------------------------------------------
 
@@ -99,14 +169,22 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         if phone is None:
             return None  # not a Waggle phone, or one speaking a version we don't
         for utterance in utterances:
-            request = self.parse(utterance, lang, phone)
-            if request is not None and self.would_allow(phone, request):
-                LOG.info(f"Waggle: {utterance!r} from {phone.client_id} -> "
-                         f"{request.request} {request.params}")
-                return IntentHandlerMatch(match_type=UTTERANCE_REQUEST,
-                                          match_data=request.to_dict(),
-                                          skill_id=self.skill_id,
-                                          utterance=utterance)
+            parsed = self.parse(utterance, lang, phone)
+            if parsed is None:
+                continue
+            if parsed.check_app and not self.apps.has_app(phone.client_id, parsed.params["name"]):
+                continue  # "open the garage door": not an app on this phone
+            if not self.would_allow(phone, parsed):
+                continue
+            match_data = {"request": parsed.request, "params": dict(parsed.params),
+                          "speak": True}
+            if parsed.missing:
+                match_data["missing"] = parsed.missing
+            LOG.info(f"Waggle: {utterance!r} from {phone.client_id} -> "
+                     f"{parsed.request} {parsed.params}"
+                     + (f", asking for {parsed.missing}" if parsed.missing else ""))
+            return IntentHandlerMatch(match_type=UTTERANCE_REQUEST, match_data=match_data,
+                                      skill_id=self.skill_id, utterance=utterance)
         return None
 
     def match_medium(self, utterances: List[str], lang: str,
@@ -117,29 +195,44 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                   message: Message) -> Optional[IntentHandlerMatch]:
         return None
 
-    def parse(self, utterance: str, lang: str, phone: Phone) -> Optional[WaggleRequest]:
-        """The request in ``utterance``, with times read on the phone's clock."""
+    def phone_now(self, phone: Optional[Phone]) -> datetime:
+        """The current time on the phone's clock (the hub's if it announced no timezone)."""
         now = self.clock()
-        tz = phone.tz
-        now = now.astimezone(tz) if tz is not None else now.astimezone()  # else the hub's
+        tz = phone.tz if phone is not None else None
+        return now.astimezone(tz) if tz is not None else now.astimezone()
+
+    def parse(self, utterance: str, lang: str, phone: Phone) -> Optional[Parsed]:
+        """The request in ``utterance``, with times read on the phone's clock."""
         try:
-            return parse_request(utterance, lang, now)
+            return parse_utterance(utterance, lang, self.phone_now(phone))
         except Exception as e:  # never break the pipeline on an odd utterance
             LOG.exception(f"Waggle: failed to parse {utterance!r}: {e}")
             return None
 
-    def would_allow(self, phone: Phone, request: WaggleRequest) -> bool:
-        """Enabled here, and not blocked by the phone's rules (an "ask" rule allows)."""
-        settings = self.waggle_settings
-        if not settings.enabled(request.request) or request.request not in SUPPORTED_REQUESTS:
-            return False
+    def would_allow(self, phone: Phone, request: Union[WaggleRequest, Parsed]) -> bool:
+        """Enabled here, shared by the phone, and not blocked by its rules (an "ask" rule
+        allows). A request still missing something is judged with a stand-in for it."""
+        params = dict(request.params)
+        if isinstance(request, Parsed) and request.missing:
+            params = {**PLACEHOLDERS.get(request.missing, {}), **params}
         try:
-            intent = build_intent(request, settings)
-        except ValueError:
+            complete = WaggleRequest(request.request, params)
+        except WaggleError:
             return False
-        return decide_for(phone.capabilities, intent).allowed
+        return phone_allows(phone.capabilities, complete, self.waggle_settings)
 
     # --- speech --------------------------------------------------------------
+
+    def _ask(self, origin: Message, dialog: str, data: dict) -> Optional[str]:
+        """Speak a question to the phone and wait for the answer (None: none, or "cancel").
+
+        ``get_response`` speaks by forwarding the message it's given, so it gets
+        one addressed to the phone (a reply to ``origin``). It also marks the
+        session as waiting for this skill's answer, and that session travels with
+        the question to the phone, which sends it back with the answer.
+        """
+        to_phone = origin.reply(origin.msg_type, origin.data)
+        return self.get_response(dialog, data, num_retries=1, message=to_phone, wait=False)
 
     def _render(self, dialog: str, data: dict) -> str:
         return self.dialog_renderer.render(dialog, data)

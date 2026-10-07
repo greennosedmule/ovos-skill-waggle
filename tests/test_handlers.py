@@ -225,12 +225,6 @@ def test_disabled(make_pipeline, make_phone, bus, recorder):
     assert recorder.of(INTENT) == []
 
 
-@pytest.mark.parametrize("name,params", [("calendar.next", {}), ("app.open", {"name": "Camera"})])
-def test_not_yet_supported(bus, recorder, phone, name, params):
-    response = run(bus, recorder, request(name, params))
-    assert response == RequestResponse.failure("bad_request", "I can't do that on your phone yet.")
-
-
 @pytest.mark.parametrize("data", [
     {"request": "timer.set", "params": {"seconds": 0}},
     {"request": "timer.launch", "params": {}},

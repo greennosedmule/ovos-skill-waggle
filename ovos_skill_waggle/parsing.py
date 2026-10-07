@@ -21,15 +21,18 @@ English only (v1); other languages never match.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from ovos_date_parser import extract_datetime, extract_duration
 from ovos_number_parser import numbers_to_digits
 from ovos_utils.log import LOG
 
-from ovos_skill_waggle.requests import ALARM_SET, ALARMS_SHOW, TIMER_SET, WaggleRequest
+from ovos_skill_waggle.requests import (
+    ALARM_SET, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL, MESSAGE_COMPOSE, TIMER_SET,
+    WaggleRequest,
+)
 from waggle.intents import TIMER_MAX_S, TIMER_MIN_S
 
 PARSE_LANG = "en-us"
@@ -346,24 +349,228 @@ def alarm_time(text: str, now: datetime) -> Optional[tuple[int, int]]:
     return _resolve(clock, text, now) if clock else None
 
 
+# --- parse results -----------------------------------------------------------
+
+MISSING_DURATION = "duration"  # timer.set without a length
+MISSING_TIME = "time"          # alarm.set without a time
+MISSING_BODY = "body"          # message.compose without the message
+
+
+@dataclass(frozen=True)
+class Parsed:
+    """A request read from an utterance.
+
+    ``missing`` names what the user still has to say (a follow-up question
+    asks for it). ``check_app`` marks an ``app.open`` said without the word
+    "app" ("open spotify"), which is taken only if the phone has such an app,
+    so that "open the garage door" isn't.
+    """
+    request: str
+    params: dict = field(default_factory=dict)
+    missing: Optional[str] = None
+    check_app: bool = False
+
+    @property
+    def complete(self) -> bool:
+        return self.missing is None
+
+    def request_or_none(self) -> Optional[WaggleRequest]:
+        """The :class:`WaggleRequest`, if nothing is missing and nothing left to check."""
+        if not self.complete or self.check_app:
+            return None
+        return WaggleRequest(self.request, self.params, speak=True)
+
+
+def _bare_timer_label(text: str) -> Optional[str]:
+    """ "start a pasta timer" -> "pasta"."""
+    m = re.search(r"\b([a-z']+) timer\b", text)
+    if m and m.group(1) not in _LABEL_STOP:
+        return _clean_label(m.group(1))
+    return None
+
+
+# --- calendar ----------------------------------------------------------------
+
+_CAL_NOUN = re.compile(r"\b(?:appointments?|meetings?|events?|calendar|schedule|agenda)\b")
+_CAL_ASKS = re.compile(
+    r"\b(?:what|what's|whats|when|when's|where|where's|which|do i have|have i got|is there|"
+    r"are there|anything|any|next|read|tell me|show|check|list|give me)\b")
+_CAL_NOT = re.compile(
+    r"\b(?:add|create|make|book|cancel|delete|remove|move|reschedule|change|set up|invite|"
+    r"accept|decline|put|new|share|sync|clear)\b|\bschedule (?:a|an|my|the|it)\b")
+_CAL_FREE = re.compile(
+    r"\b(?:what do i have|what have i got|what's happening|whats happening|what's going on|"
+    r"am i (?:busy|free)|what are my plans|what's my day look like|how does my day look)\b")
+# "my meeting", "any appointments", "next event": the user's own, not "the event horizon".
+_CAL_MINE = re.compile(r"\b(?:my|any|next|upcoming|coming up)\b")
+_NEXT_ONE = re.compile(r"\bnext (?:appointment|meeting|event)\b|\bwhen (?:is|'s) my\b|"
+                       r"\bwhere (?:is|'s) my\b")
+_NEXT_N = re.compile(r"\bnext (\d{1,2}) (?:appointments|meetings|events|things)\b")
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def calendar_day(text: str, now: datetime) -> Optional[date]:
+    """The day a calendar question is about, on the phone's calendar, or None for "next"."""
+    today = now.date()
+    if re.search(r"\b(?:today|tonight|this (?:morning|afternoon|evening))\b", text):
+        return today
+    if re.search(r"\btomorrow\b", text):
+        return today + timedelta(days=1)
+    m = re.search(rf"\b(?:on |this |next )?({'|'.join(_WEEKDAYS)})\b", text)
+    if m:
+        ahead = (_WEEKDAYS.index(m.group(1)) - today.weekday()) % 7
+        if ahead == 0 and re.search(rf"\bnext {m.group(1)}\b", text):
+            ahead = 7
+        return today + timedelta(days=ahead)
+    return None
+
+
+def _parse_calendar(text: str, now: datetime) -> Optional[Parsed]:
+    noun = _CAL_NOUN.search(text)
+    if _CAL_NOT.search(text):
+        return None
+    day = calendar_day(text, now)
+    mine = _CAL_MINE.search(text)
+    if not ((noun and mine and _CAL_ASKS.search(text)) or (_CAL_FREE.search(text) and (noun or day))):
+        return None
+    if day is not None:
+        return Parsed(CALENDAR_NEXT, {"day": day.isoformat()})
+    m = _NEXT_N.search(text)
+    if m:
+        return Parsed(CALENDAR_NEXT, {"count": max(1, min(10, int(m.group(1))))})
+    if _NEXT_ONE.search(text):
+        return Parsed(CALENDAR_NEXT, {"count": 1})
+    return Parsed(CALENDAR_NEXT, {"count": 3})
+
+
+# --- contacts: calls and texts -----------------------------------------------
+
+_PHONE_TYPE_WORDS = {"cell": "cell", "cell phone": "cell", "mobile": "cell", "home": "home",
+                     "work": "work", "office": "work"}
+# For choosing among a contact's numbers by type.
+PHONE_TYPE_SYNONYMS = {"cell phone": "cell", "mobile": "cell", "office": "work"}
+_TYPE = r"(?P<type>cell phone|cell|mobile|home|work|office)"
+_NOT_A_NAME = re.compile(
+    r"^(?:me|it|him|her|them|us|this|that|back|off|out|up|in|an?|the police|for|someone|"
+    r"anyone|somebody|everyone)\b")
+
+
+def _clean_name(name: str) -> Optional[str]:
+    """A contact name as said: "my mom" -> "mom"; None for "me a taxi", "it a day"."""
+    name = _WS.sub(" ", name).strip()
+    if not name or _NOT_A_NAME.match(name):
+        return None
+    name = _sub(r"^(?:my|the|our) ", "", name)
+    if len(name.split()) > 4:
+        return None
+    return name or None
+
+
+def _name_and_type(rest: str) -> tuple[Optional[str], Optional[str]]:
+    """ "mom on her cell" -> ("mom", "cell"); "dad's work number" -> ("dad", "work")."""
+    m = (re.fullmatch(rf"(?P<name>.+?) (?:on|at) (?:(?:his|her|their|the) )?{_TYPE}"
+                      rf"(?: number| phone| line)?", rest)
+         or re.fullmatch(rf"(?P<name>.+?)(?:'s)? {_TYPE}(?: number| phone| line)?", rest))
+    if m:
+        return _clean_name(m.group("name")), _PHONE_TYPE_WORDS[m.group("type")]
+    return _clean_name(_sub(r"'s$", "", rest)), None
+
+
+_CALL = re.compile(r"^(?:call|phone|dial|ring|place a call to|make a call to|"
+                   r"start a call (?:to|with)|video call) (?P<rest>.+)$")
+_GIVE_CALL = re.compile(r"^give (?P<rest>.+?) a (?:call|ring)$")
+
+
+def _parse_call(text: str) -> Optional[Parsed]:
+    m = _CALL.match(text) or _GIVE_CALL.match(text)
+    if not m:
+        return None
+    rest = _sub(r"\s+(?:now|for me|right now|please)$", "", m.group("rest"))
+    name, phone_type = _name_and_type(rest)
+    if not name:
+        return None
+    params = {"name": name}
+    if phone_type:
+        params["type"] = phone_type
+    return Parsed(CONTACT_CALL, params)
+
+
+# Matched against the utterance as said (see _as_said), so the body keeps its case and
+# punctuation.
+_SAYING = r"(?:saying|that says|that|and say|to say|and tell (?:him|her|them)|with the message)"
+_TEXT_TO = re.compile(
+    rf"^(?:send|write|compose|draft)? ?(?:an? )?(?:text|sms|message|text message)(?: message)? "
+    rf"(?:to|for) (?P<name>[^,:]+?)(?:(?:,? {_SAYING}|,|:) (?P<body>.+))?$", re.IGNORECASE)
+_TEXT = re.compile(rf"^(?:text|message|sms) (?P<name>[^,:]+?)(?:(?:,? {_SAYING}|,|:) (?P<body>.+))?$",
+                   re.IGNORECASE)
+
+
+def _as_said(utterance: str) -> str:
+    """The utterance with its case and punctuation, minus leading fillers and "on my phone"."""
+    text = _WS.sub(" ", utterance.replace("’", "'")).strip()
+    lead = _FILLERS.match(text.lower())
+    text = text[lead.end():] if lead else text
+    return _WS.sub(" ", re.sub(r"\b(?:on|to|in) (?:my|the) (?:phone|cell(?: phone)?|mobile)\b",
+                               " ", text, flags=re.IGNORECASE)).strip()
+
+
+def _parse_message(utterance: str) -> Optional[Parsed]:
+    text = _as_said(utterance)
+    m = _TEXT_TO.match(text) or _TEXT.match(text)
+    if not m:
+        return None
+    name, body = m.group("name").lower(), m.group("body")
+    if body is None and len(name.split()) > 2:
+        # "text mom i'm running late": no word marks where the name ends, so the first
+        # word is the name. The phone shows the message before it's sent.
+        name, _ = name.split(" ", 1)
+        body = m.group("name").split(" ", 1)[1]
+    name = _clean_name(re.sub(r"[^\w' -]", " ", name))
+    if not name:
+        return None
+    if body is None or not body.strip():
+        return Parsed(MESSAGE_COMPOSE, {"name": name}, missing=MISSING_BODY)
+    return Parsed(MESSAGE_COMPOSE, {"name": name, "body": body.strip()})
+
+
+# --- apps --------------------------------------------------------------------
+
+_OPEN = re.compile(r"^(?:open|launch|start|run|bring up|pull up|fire up|switch to)(?: up)? "
+                   r"(?P<name>.+?)(?P<app> app(?:lication)?)?$")
+
+
+def _parse_app(text: str) -> Optional[Parsed]:
+    m = _OPEN.match(text)
+    if not m:
+        return None
+    name = _sub(r"^(?:the|my|an?) ", "", m.group("name")).strip()
+    if not name or len(name.split()) > 4:
+        return None
+    return Parsed(APP_OPEN, {"name": name}, check_app=m.group("app") is None)
+
+
 # --- requests ----------------------------------------------------------------
 
-def _parse_timer(text: str) -> Optional[WaggleRequest]:
+def _parse_timer(text: str) -> Optional[Parsed]:
     if not _TIMER_WORD.search(text) or _TIMER_NOT.search(text) or not _has_set_intent(
             text, r"timer|count ?down"):
         return None
     label, rest = _explicit_label(text)
     duration = find_duration(rest)
-    if duration is None or not TIMER_MIN_S <= duration.seconds <= TIMER_MAX_S:
-        return None  # "set a timer" with no length is a follow-up question (S3)
+    if duration is None:
+        # "set a timer", "start a pasta timer": ask how long.
+        label = label or _bare_timer_label(rest)
+        return Parsed(TIMER_SET, {"label": label} if label else {}, missing=MISSING_DURATION)
+    if not TIMER_MIN_S <= duration.seconds <= TIMER_MAX_S:
+        return None
     label = label or _timer_label(duration)
     params = {"seconds": duration.seconds}
     if label:
         params["label"] = label
-    return WaggleRequest(TIMER_SET, params, speak=True)
+    return Parsed(TIMER_SET, params)
 
 
-def _parse_alarm(text: str, now: datetime) -> Optional[WaggleRequest]:
+def _parse_alarm(text: str, now: datetime) -> Optional[Parsed]:
     if not _ALARM_WORD.search(text) or _ALARM_NOT.search(text) or _OTHER_DAY.search(text):
         return None
     if not _WAKE.search(text) and not _has_set_intent(text, "alarm"):
@@ -371,18 +578,20 @@ def _parse_alarm(text: str, now: datetime) -> Optional[WaggleRequest]:
     label, rest = _explicit_label(text)
     when = alarm_time(rest, now)
     if when is None:
-        return None  # "set an alarm" with no time is a follow-up question (S3)
+        if re.search(r"\d", rest):
+            return None  # a number it can't read as a time: not a bare "set an alarm"
+        return Parsed(ALARM_SET, {"label": label} if label else {}, missing=MISSING_TIME)
     params = {"hour": when[0], "minute": when[1]}
     if label:
         params["label"] = label
-    return WaggleRequest(ALARM_SET, params, speak=True)
+    return Parsed(ALARM_SET, params)
 
 
-def parse_request(utterance: str, lang: str, now: datetime) -> Optional[WaggleRequest]:
-    """The request an utterance asks for, or None.
+def parse_utterance(utterance: str, lang: str, now: datetime) -> Optional[Parsed]:
+    """What an utterance asks for, complete or not, or None.
 
     ``now`` is the current time in the phone's timezone; relative and
-    a.m./p.m.-less alarm times are computed from it.
+    a.m./p.m.-less alarm times and calendar days are computed from it.
     """
     if not isinstance(utterance, str) or not str(lang or "").lower().startswith("en"):
         return None
@@ -392,10 +601,74 @@ def parse_request(utterance: str, lang: str, now: datetime) -> Optional[WaggleRe
     # "what time is my alarm set for" asks, it doesn't set.
     asks_only = not re.search(_SET_VERB, _sub(r"\balarms? (?:is |are )?set\b", "alarm", text))
     if _SHOW_ALARMS.search(text) and not _ALARM_NOT.search(text) and asks_only:
-        return WaggleRequest(ALARMS_SHOW, {}, speak=True)
+        return Parsed(ALARMS_SHOW, {})
     digits = digitize(text)
     if _TIMER_WORD.search(digits):
         return _parse_timer(digits)
     if _ALARM_WORD.search(digits):
         return _parse_alarm(digits, now)
-    return None
+    return (_parse_calendar(digits, now) or _parse_message(utterance) or _parse_call(text)
+            or _parse_app(text))
+
+
+def parse_request(utterance: str, lang: str, now: datetime) -> Optional[WaggleRequest]:
+    """The complete request an utterance asks for, or None (see :func:`parse_utterance`)."""
+    parsed = parse_utterance(utterance, lang, now)
+    return parsed.request_or_none() if parsed else None
+
+
+# --- follow-up answers -------------------------------------------------------
+
+def answer_duration(answer: str) -> Optional[int]:
+    """The timer length in an answer to "for how long?" ("10 minutes", "an hour"), or None."""
+    duration = find_duration(digitize(normalize(answer)))
+    if duration is None or not TIMER_MIN_S <= duration.seconds <= TIMER_MAX_S:
+        return None
+    return duration.seconds
+
+
+def answer_alarm_time(asked: str, answer: str, now: datetime) -> Optional[tuple[int, int]]:
+    """The alarm time in an answer to "for what time?".
+
+    Read together with the request, so "wake me up" … "7" means 7 a.m.
+    """
+    answer = digitize(normalize(answer))
+    if not re.search(r"\d|\bnoon\b|\bmidday\b|\bmidnight\b", answer):
+        return None
+    if re.match(r"\d", answer):
+        answer = f"at {answer}"  # a bare "7" reads as a clock time, not a count
+    return alarm_time(f"{digitize(normalize(asked))} {answer}", now)
+
+
+_ORDINALS = {"first": 0, "1st": 0, "one": 0, "second": 1, "2nd": 1, "two": 1, "third": 2,
+             "3rd": 2, "three": 2, "fourth": 3, "4th": 3, "four": 3, "fifth": 4, "5th": 4,
+             "five": 4}
+
+
+def choose(answer: str, options: list[str],
+           synonyms: Optional[dict[str, str]] = None) -> Optional[int]:
+    """Which of ``options`` an answer picks ("Sam Lee", "the second one", "Lee"), or None.
+
+    ``synonyms`` maps words of the answer to words of the options ("mobile" -> "cell").
+    """
+    text = normalize(answer)
+    for word, replacement in (synonyms or {}).items():
+        text = _sub(rf"\b{re.escape(word)}\b", replacement, text)
+    if not text or not options:
+        return None
+    folded = [normalize(o) for o in options]
+    if text in folded:
+        return folded.index(text)
+    m = re.search(r"\b(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)\b|"
+                  r"^(?:the |number )?(one|two|three|four|five|\d)$", text)
+    if m:
+        word = m.group(1) or m.group(2)
+        index = len(options) - 1 if word == "last" else (
+            int(word) - 1 if word.isdigit() else _ORDINALS[word])
+        return index if 0 <= index < len(options) else None
+    # Words of the answer that pick out exactly one option: "Lee", "the work one".
+    words = [w for w in text.split()
+             if w not in ("the", "one", "number", "please", "my", "a", "his", "her", "their")]
+    hits = [i for i, o in enumerate(folded) if words and all(re.search(rf"\b{re.escape(w)}\b", o)
+                                                             for w in words)]
+    return hits[0] if len(hits) == 1 else None

@@ -117,3 +117,36 @@ def test_new_session_of_the_same_phone(bus, recorder, service, make_phone):
     say(bus, "set an alarm for 6:30 am", phone.peer)
     assert [m.data["utterance"] for m in recorder.of("speak")] == ["Alarm set for 6:30 AM."]
     assert recorder.of(INTENT)[0].context["destination"] == phone.peer
+
+
+def test_follow_up_question_through_converse(bus, recorder, service, make_phone):
+    """ "Set a timer" asks how long; the answer comes back through ovos-core's converse stage."""
+    import threading
+    import time
+
+    phone = make_phone()
+    recorder.clear()
+    first = threading.Thread(target=say, args=(bus, "set a timer", PEER), daemon=True)
+    first.start()
+
+    question = None
+    deadline = time.time() + 5
+    while question is None and time.time() < deadline:
+        question = next((m for m in recorder.of("speak") if m.data.get("expect_response")), None)
+        time.sleep(0.05)
+    assert question is not None, recorder.types()
+    assert question.data["utterance"] == "For how long?"
+    assert question.context["destination"] == PEER
+
+    # The phone answers in the session the question came with, as Wiggins does.
+    bus.emit(Message("recognizer_loop:utterance", {"utterances": ["10 minutes"], "lang": "en-US"},
+                     {"source": PEER, "peer": PEER, "destination": "skills",
+                      "session": question.context["session"]}))
+    first.join(10)
+    assert not first.is_alive()
+
+    intents = [e.request.data for e in phone.log if "action" in e.request.data]
+    assert [i["action"] for i in intents] == [ACTION_SET_TIMER]
+    assert intents[0]["extras"]["android.intent.extra.alarm.LENGTH"]["value"] == 600
+    assert recorder.of(ALERTS_TIMER) == []
+    assert [m.data["utterance"] for m in recorder.of("speak")][-1] == "Timer set for 10 minutes."

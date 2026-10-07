@@ -9,11 +9,13 @@ with ``bad_request``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Callable, Optional
 
 from ovos_bus_client.message import Message
 
 from waggle.messages import ErrorCode, bad_request
+from waggle.queries import PHONE_TYPES
 
 REQUEST = "waggle:request"
 REQUEST_RESPONSE = "waggle:request.response"
@@ -48,6 +50,16 @@ def _is_text(v: Any) -> bool:
     return isinstance(v, str) and bool(v.strip())
 
 
+def _is_iso_date(v: Any) -> bool:
+    if not isinstance(v, str) or len(v) != 10:
+        return False
+    try:
+        date.fromisoformat(v)
+    except ValueError:
+        return False
+    return True
+
+
 # Per request: param name -> (required, check, description for errors).
 _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
     ALARM_SET: {"hour": (True, _int(0, 23), "an integer 0–23"),
@@ -56,9 +68,11 @@ _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
     TIMER_SET: {"seconds": (True, _int(1, 86400), "an integer 1–86400"),
                 "label": (False, _is_str, "a string")},
     ALARMS_SHOW: {},
-    CALENDAR_NEXT: {"count": (False, _int(1, 10), "an integer 1–10")},
+    CALENDAR_NEXT: {"count": (False, _int(1, 10), "an integer 1–10"),
+                    "day": (False, _is_iso_date, "a date, YYYY-MM-DD")},
     APP_OPEN: {"name": (True, _is_text, "a non-empty string")},
-    CONTACT_CALL: {"name": (True, _is_text, "a non-empty string")},
+    CONTACT_CALL: {"name": (True, _is_text, "a non-empty string"),
+                   "type": (False, lambda v: v in PHONE_TYPES, "cell, home, work or other")},
     MESSAGE_COMPOSE: {"name": (True, _is_text, "a non-empty string"),
                       "body": (True, _is_text, "a non-empty string")},
 }

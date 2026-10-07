@@ -89,6 +89,7 @@ def recorder(bus):
 
 class TestPipeline(WagglePipeline):
     __test__ = False  # not a test class, despite the name
+    fetch_apps_in_background = False
 
     def __del__(self):
         # ovos-workshop's __del__ shuts the app down again, often at interpreter
@@ -124,6 +125,9 @@ def make_phone(bus):
         phone = FakePhone(bus, peer=peer, **kwargs)
         if announce:
             phone.announce()
+            # The announcement makes the pipeline fetch the app list (apps.py); tests of
+            # requests start from an empty log.
+            phone.log.clear()
         made.append(phone)
         return phone
 

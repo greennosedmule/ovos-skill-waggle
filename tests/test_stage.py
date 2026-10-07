@@ -87,8 +87,8 @@ def test_match_uses_peer_not_source(pipeline, phone):
 
 # --- 2. a request it understands ---------------------------------------------
 
-@pytest.mark.parametrize("text", ["what's the weather", "set a timer", "cancel my alarm",
-                                  "tell me a joke", ""])
+@pytest.mark.parametrize("text", ["what's the weather", "cancel my alarm", "tell me a joke",
+                                  "turn on the den lights", ""])
 def test_unparsed_no_match(pipeline, phone, text):
     assert match(pipeline, text) is None
 
@@ -202,7 +202,7 @@ def test_parser_errors_never_break_the_pipeline(pipeline, phone, monkeypatch):
     def boom(*args):
         raise RuntimeError("parser bug")
 
-    monkeypatch.setattr(module, "parse_request", boom)
+    monkeypatch.setattr(module, "parse_utterance", boom)
     assert match(pipeline, TIMER) is None
 
 
