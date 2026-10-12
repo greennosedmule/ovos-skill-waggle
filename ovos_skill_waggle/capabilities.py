@@ -9,13 +9,22 @@ the client id, which ``hivemind-core add-client`` assigns once, and keeps the
 latest full peer for addressing the phone.
 
 A peer that isn't in HiveMind's form (a local test client, say) is its own key.
+
+The cache is kept in a JSON file, so a hub restart doesn't forget the phones
+(a phone that stays connected doesn't announce again until its rules change).
+A phone's entry is rewritten whenever its capabilities change; a new peer
+alone isn't written, since replies are addressed by each request's own peer.
 """
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from datetime import tzinfo
+from pathlib import Path
 from typing import Optional, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,6 +34,8 @@ from ovos_utils.log import LOG
 from waggle.messages import Capabilities, ErrorCode, WaggleError
 
 PEER_SEPARATOR = "::"
+# The cache file's format, in case it changes.
+FILE_VERSION = 1
 
 
 def peer_of(message: Message) -> Optional[str]:
@@ -76,12 +87,20 @@ class CapabilityCache:
     An announcement in a version this package doesn't speak replaces any
     earlier one with a rejection, so the phone is no longer treated as a
     Waggle phone; :meth:`rejected_version` says why.
+
+    With a ``path``, the phones are loaded from that file and saved to it
+    whenever one is added, changes its capabilities or is dropped. Rejections
+    aren't saved. A file that can't be read or written is logged and otherwise
+    ignored: the cache then works from memory, as it would without one.
     """
 
-    def __init__(self):
+    def __init__(self, path: Union[str, Path, None] = None):
         self._lock = threading.Lock()
         self._phones: dict[str, Phone] = {}
         self._rejected: dict[str, object] = {}
+        self.path = Path(path) if path else None
+        if self.path is not None:
+            self._load()
 
     def update(self, message: Message) -> Optional[Phone]:
         """Record a ``waggle.capabilities`` message; the phone, or None if rejected."""
@@ -94,17 +113,22 @@ class CapabilityCache:
             capabilities = Capabilities.from_dict(message.data)
         except WaggleError as e:
             with self._lock:
-                self._phones.pop(client_id, None)
+                dropped = self._phones.pop(client_id, None)
                 if e.code is ErrorCode.UNSUPPORTED_VERSION:
                     self._rejected[client_id] = message.data["version"]
                 else:
                     self._rejected.pop(client_id, None)
+                if dropped is not None:
+                    self._save()
             LOG.warning(f"Waggle: rejected capabilities from {peer}: {e.message}")
             return None
         phone = Phone(client_id, peer, capabilities, time.time())
         with self._lock:
+            before = self._phones.get(client_id)
             self._phones[client_id] = phone
             self._rejected.pop(client_id, None)
+            if before is None or before.capabilities.to_dict() != capabilities.to_dict():
+                self._save()
         LOG.info(f"Waggle: capabilities from {peer} (v{capabilities.version}, "
                  f"{len(capabilities.rules)} rules, tz {capabilities.timezone})")
         return phone
@@ -129,8 +153,10 @@ class CapabilityCache:
 
     def forget(self, key: str) -> None:
         with self._lock:
-            self._phones.pop(client_id_of(key), None)
+            dropped = self._phones.pop(client_id_of(key), None)
             self._rejected.pop(client_id_of(key), None)
+            if dropped is not None:
+                self._save()
 
     def phones(self) -> list[Phone]:
         with self._lock:
@@ -139,3 +165,51 @@ class CapabilityCache:
     def __len__(self) -> int:
         with self._lock:
             return len(self._phones)
+
+    # --- the file --------------------------------------------------------------
+
+    def _load(self) -> None:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                saved = json.load(f)
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as e:
+            LOG.warning(f"Waggle: can't read {self.path}, starting with no phones: {e}")
+            return
+        if not isinstance(saved, dict) or saved.get("version") != FILE_VERSION:
+            LOG.warning(f"Waggle: ignoring {self.path}: not a version {FILE_VERSION} cache")
+            return
+        phones = saved.get("phones")
+        for client_id, entry in (phones if isinstance(phones, dict) else {}).items():
+            try:
+                phone = Phone(client_id, entry["peer"],
+                              Capabilities.from_dict(entry["capabilities"]),
+                              float(entry["updated"]))
+            except (KeyError, TypeError, ValueError, WaggleError) as e:
+                LOG.warning(f"Waggle: dropping the saved capabilities of {client_id}: {e}")
+                continue
+            self._phones[client_id] = phone
+        LOG.info(f"Waggle: {len(self._phones)} phones from {self.path}")
+
+    def _save(self) -> None:
+        """Write every phone to the file. Called with the lock held."""
+        if self.path is None:
+            return
+        saved = {"version": FILE_VERSION, "phones": {
+            phone.client_id: {"peer": phone.peer, "capabilities": phone.capabilities.to_dict(),
+                              "updated": phone.updated}
+            for phone in self._phones.values()}}
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # A new file renamed over the old one, so a crash never leaves half a file.
+            fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=f".{self.path.name}.")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(saved, f, indent=1)
+                os.replace(tmp, self.path)
+            except BaseException:
+                os.unlink(tmp)
+                raise
+        except OSError as e:
+            LOG.warning(f"Waggle: can't save the phones to {self.path}: {e}")

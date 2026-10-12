@@ -281,7 +281,9 @@ class RequestHandlers:
         if not decision.allowed:
             return Outcome.failure(ErrorCode.BLOCKED.value, "blocked")
         timeout_s = self._timeout(decision.mode, phone, settings)
-        if decision.mode is Mode.ASK and request.speak:
+        if decision.mode is Mode.ASK:
+            # Said even when the caller speaks the outcome itself (the persona): the user
+            # has to act now, and the outcome only comes once they have.
             self._say(origin, "confirm_on_phone", {})
         LOG.info(f"Waggle: {request.request} -> {phone.peer} ({intent.action}, "
                  f"{decision.mode.value}, waiting {timeout_s}s)")

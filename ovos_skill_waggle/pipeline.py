@@ -1,4 +1,4 @@
-"""The ``waggle`` pipeline stage: an ovos-core 2.x pipeline plugin (see SPEC.md "The pipeline stage").
+"""The ``waggle`` pipeline stage: an ovos-core 3.x pipeline plugin (see SPEC.md "The pipeline stage").
 
 :class:`WagglePipeline` is both a ``ConfidenceMatcherPipeline`` (OPM's
 pipeline plugin template) and an ``OVOSAbstractApplication`` (a skill that
@@ -17,15 +17,19 @@ How a match runs: ovos-core emits the match as a reply to the utterance,
 with type :data:`UTTERANCE_REQUEST` and data ``{**utterance data, request,
 params, speak: true, utterance, lang}``, which is a ``waggle:request``'s data
 under its own type. Its handler runs the request like any other, and is
-registered with ``is_intent=True`` so ovos-workshop emits
-``ovos.utterance.handled`` once the outcome has been spoken. Plain
-``waggle:request`` messages (the persona's tool calls, other skills) are
+registered with ``handler_info`` so ovos-core emits ``ovos.utterance.handled``
+once the outcome has been spoken. Plain ``waggle:request`` messages (other
+skills) and the persona's tool calls (:mod:`~ovos_skill_waggle.tools`) are
 handled without it, because whoever made them owns the utterance.
 
 A request said without everything it needs ("set a timer", "text Mom")
 matches with ``missing`` set in its data. Its handler asks for the rest with
 ``get_response`` (the converse stage hands the answer back), reads the answer
 here, since only the stage parses language, and then runs the request.
+
+A text message keeps the words as the phone sent them, punctuation included:
+:class:`~ovos_skill_waggle.said.SaidUtterances` records each session's
+``recognizer_loop:utterance`` before ovos-core's transformers rewrite it.
 
 The stage must stay fast, since every utterance passes through it: a dict
 lookup for the peer, then regexes and the date parser, and only for phones.
@@ -34,9 +38,10 @@ lookup for the peer, then regexes and the date parser, and only for phones.
 """
 from __future__ import annotations
 
+import weakref
 from datetime import datetime, timezone
 from os.path import dirname
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from ovos_bus_client.client import MessageBusClient
 from ovos_bus_client.message import Message
@@ -58,12 +63,15 @@ from ovos_skill_waggle.parsing import (
     original_wording, parse_utterance,
 )
 from ovos_skill_waggle.requests import MESSAGE_COMPOSE, REQUEST, WaggleRequest
+from ovos_skill_waggle.said import SaidUtterances
 from ovos_skill_waggle.settings import Settings
 
 PLUGIN_ID = "ovos-waggle-pipeline-plugin"
 SKILL_ID = "ovos-skill-waggle.greennosedmule"
 # The match type ovos-core emits for a request the stage parsed from an utterance.
 UTTERANCE_REQUEST = "waggle:utterance"
+# What a phone sends; recorded as said, before ovos-core's transformers rewrite it.
+PHONE_UTTERANCE = "recognizer_loop:utterance"
 
 # The question for each missing piece, and stand-ins that let the rule check run without it.
 ASK_DIALOGS = {MISSING_DURATION: "ask_duration", MISSING_TIME: "ask_time",
@@ -71,12 +79,27 @@ ASK_DIALOGS = {MISSING_DURATION: "ask_duration", MISSING_TIME: "ask_time",
 PLACEHOLDERS = {MISSING_DURATION: {"seconds": 60}, MISSING_TIME: {"hour": 7, "minute": 0},
                 MISSING_BODY: {"body": "-"}}
 
+# The plugins running in this process, for the persona's tools, which ovos-persona
+# loads without a bus or any other way to reach the plugin.
+_running: "weakref.WeakSet[WagglePipeline]" = weakref.WeakSet()
+
+
+def find_phone(peer: Optional[str]) -> Tuple[Optional["WagglePipeline"], Optional[Phone]]:
+    """The running plugin that knows the phone ``peer``, and the phone; else (None, None)."""
+    for pipeline in list(_running):
+        phone = pipeline.capabilities.get(peer)
+        if phone is not None:
+            return pipeline, phone
+    return None, None
+
 
 class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
     """The Waggle stage, request handlers and capability cache, in one plugin."""
 
     # Fetch app lists in a thread; tests turn it off to keep the bus traffic in order.
     fetch_apps_in_background = True
+    # How long a text message's match waits for the utterance as said to be recorded.
+    wait_for_said_s = 0.5
 
     def __init__(self, bus: Optional[Union[MessageBusClient, FakeBus]] = None,
                  config: Optional[Dict] = None):
@@ -87,7 +110,8 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                                          resources_dir=dirname(__file__))
         ConfidenceMatcherPipeline.__init__(self, bus=bus, config=config)
         self.waggle_settings = Settings.from_config(self.config)
-        self.capabilities = CapabilityCache()
+        self.capabilities = CapabilityCache(self.waggle_settings.capabilities_file())
+        self.said = SaidUtterances()
         # The current time in UTC; tests replace it.
         self.clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
         self.apps = AppCatalog(self.bus, lambda: self.waggle_settings.response_timeout_s)
@@ -96,12 +120,23 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                                         self._render, self._speak, ask=self._ask,
                                         clock=lambda: self.clock())
         self.add_event(CAPABILITIES, self.handle_capabilities, speak_errors=False)
+        self.add_event(PHONE_UTTERANCE, self.said.record, speak_errors=False)
         self.add_event(REQUEST, self.handle_request, speak_errors=False)
         # Ends the phone's turn with ovos.utterance.handled when the handler returns:
-        # ovos-workshop emits it on ovos-core 2.x (is_intent); on 3.x ovos-core does, once
-        # it sees the mycroft.skill.handler.complete or .error that handler_info reports.
+        # ovos-core emits it once it sees the mycroft.skill.handler.complete or .error
+        # that handler_info makes ovos-workshop report.
         self.add_event(UTTERANCE_REQUEST, self.handle_utterance_request, is_intent=True,
                        handler_info="mycroft.skill.handler", speak_errors=False)
+        _running.add(self)
+
+    # ovos-core calls shutdown(); OVOSAbstractApplication's own teardown is default_shutdown().
+    def shutdown(self) -> None:
+        _running.discard(self)
+        super().shutdown()
+
+    def default_shutdown(self) -> None:
+        _running.discard(self)
+        super().default_shutdown()
 
     # --- bus events ----------------------------------------------------------
 
@@ -171,16 +206,20 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         phone = self.capabilities.get(peer_of(message)) if message is not None else None
         if phone is None:
             return None  # not a Waggle phone, or one speaking a version we don't
+        # A phone known only from the capability file hasn't had its apps fetched yet.
+        self.apps.ensure(phone, phone_origin(message, peer_of(message)),
+                         wait=not self.fetch_apps_in_background)
         for utterance in utterances:
             parsed = self.parse(utterance, lang, phone)
             if parsed is None:
                 continue
             if parsed.request == MESSAGE_COMPOSE:
                 # The message as said, not as ovos-core's normalizer rewrote it.
-                said = self.parse(original_wording(utterance, utterances), lang, phone)
+                wording = self.as_said(message, utterance, utterances)
+                said = self.parse(wording, lang, phone)
                 if (said is not None and said.request == MESSAGE_COMPOSE
                         and said.params.get("name") == parsed.params.get("name")):
-                    parsed, utterance = said, original_wording(utterance, utterances)
+                    parsed, utterance = said, wording
             if parsed.check_app and not self.apps.has_app(phone.client_id, parsed.params["name"]):
                 continue  # "open the garage door": not an app on this phone
             if not self.would_allow(phone, parsed):
@@ -203,6 +242,13 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
     def match_low(self, utterances: List[str], lang: str,
                   message: Message) -> Optional[IntentHandlerMatch]:
         return None
+
+    def as_said(self, message: Message, heard: str, utterances: Optional[List[str]]) -> str:
+        """``heard`` as the phone sent it: from the recorded utterance, else from the original
+        wording ovos-core's normalizer passes on (without its final punctuation), else as is."""
+        session_id = SessionManager.get(message).session_id
+        return (self.said.as_said(session_id, heard, self.wait_for_said_s)
+                or original_wording(heard, utterances))
 
     def phone_now(self, phone: Optional[Phone]) -> datetime:
         """The current time on the phone's clock (the hub's if it announced no timezone)."""
@@ -238,15 +284,23 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         ``get_response`` speaks by forwarding the message it's given, so it gets
         one addressed to the phone (a reply to ``origin``). It also marks the
         session as waiting for this skill's answer, and that session travels with
-        the question to the phone, which sends it back with the answer.
+        the question to the phone, which sends it back with the answer. The
+        session also lists this skill as a converse handler, which the converse
+        stage needs.
         """
         to_phone = origin.reply(origin.msg_type, origin.data)
-        session_id = SessionManager.get(to_phone).session_id
+        session = SessionManager.get(to_phone)
+        # ovos-core's converse stage only hands an answer to a skill among the session's
+        # converse handlers. A match of the stage made this one a handler; a request from
+        # the persona's tools didn't.
+        session.add_converse_handler(self.skill_id)
+        to_phone.context["session"] = session.serialize()
+        session_id = session.session_id
         heard: list = []
 
         def on_answer(message: Message) -> None:
             # get_response returns only the first utterance, which ovos-core's normalizer
-            # rewrote; keep them all to recover the answer as said.
+            # rewrote; keep them all, in case the answer as said wasn't recorded.
             if SessionManager.get(message).session_id == session_id:
                 heard[:] = message.data.get("utterances") or []
 
@@ -257,7 +311,7 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                                        wait=False)
         finally:
             self.bus.remove(event, on_answer)
-        return None if answer is None else original_wording(answer, heard)
+        return None if answer is None else self.as_said(to_phone, answer, heard)
 
     def _render(self, dialog: str, data: dict) -> str:
         return self.dialog_renderer.render(dialog, data)

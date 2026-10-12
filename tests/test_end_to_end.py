@@ -1,12 +1,11 @@
-"""End to end on a FakeBus: ovos-core 2.x's IntentService loads the plugin from its entry point.
+"""End to end on a FakeBus: ovos-core 3.x's IntentService loads the plugin from its entry point.
 
 A padacioso intent registered for a stand-in alerts skill plays the stock
 timer skill that runs later in the pipeline. An utterance from the Waggle
 phone reaches the fake phone; the same utterance from another satellite, or
 one the phone blocks, falls through to the alerts skill.
 
-Runs on ovos-core 2.x and 3.x. Where they differ, the test accepts either:
-3.x drops a padatious intent's ``.intent`` suffix when it dispatches it,
+ovos-core 3 dispatches a padatious intent without its ``.intent`` suffix,
 reports "no match" as ``ovos.intent.unmatched``, and speaks ``get_response``
 questions as ``ovos.utterance.speak`` only.
 """
@@ -39,9 +38,9 @@ PIPELINE = [
 ]
 ALERTS_SKILL = "alerts.stand-in"
 ALERTS_TIMER = f"{ALERTS_SKILL}:set_timer.intent"
-# What a match on it is dispatched as: 3.x drops the suffix.
-ALERTS_DISPATCH = (ALERTS_TIMER, ALERTS_TIMER.removesuffix(".intent"))
-UNMATCHED = ("complete_intent_failure", "ovos.intent.unmatched")
+# What a match on it is dispatched as: without the suffix.
+ALERTS_DISPATCH = (ALERTS_TIMER.removesuffix(".intent"),)
+UNMATCHED = ("ovos.intent.unmatched",)
 HANDLED = "ovos.utterance.handled"
 
 
@@ -53,7 +52,7 @@ def service(bus):
     plugin.clock = lambda: NOW
     plugin.waggle_settings = plugin.waggle_settings.__class__.from_config(
         {"response_timeout_s": 0.3})
-    # ovos-core 3's intent parsers drop a registration without a skill_id in the context.
+    # The intent parsers drop a registration without a skill_id in the context.
     bus.emit(Message("padatious:register_intent", {
         "name": ALERTS_TIMER, "lang": "en-US",
         "samples": ["set a timer for {duration}", "start a timer for {duration}"]},
@@ -173,10 +172,7 @@ def _wait_for_question(recorder, timeout=5.0):
 
 
 def test_message_body_keeps_the_wording_as_said(bus, recorder, service, make_phone):
-    """ovos-core's normalizer sends its rewrite first; the text keeps the original.
-
-    The normalizer strips leading and trailing punctuation from both, so the "!" is lost.
-    """
+    """ovos-core's normalizer rewrites the answer and strips its "!"; the text keeps it as said."""
     import threading
 
     phone = make_phone(contacts=[{"fn": "Mom", "tel": [{"value": "+15550001111", "type": "cell"}]}],
@@ -192,7 +188,7 @@ def test_message_body_keeps_the_wording_as_said(bus, recorder, service, make_pho
                       "session": question.context["session"]}))
     first.join(10)
     intents = [e.request.data for e in phone.log if "action" in e.request.data]
-    assert intents[0]["extras"]["sms_body"]["value"] == "I'm running late, start without me"
+    assert intents[0]["extras"]["sms_body"]["value"] == "I'm running late, start without me!"
 
 
 def test_inline_message_body_keeps_the_wording_as_said(bus, recorder, service, make_phone):
@@ -204,4 +200,4 @@ def test_inline_message_body_keeps_the_wording_as_said(bus, recorder, service, m
                      {"source": PEER, "peer": PEER, "destination": "skills",
                       "session": session.serialize()}))
     intents = [e.request.data for e in phone.log if "action" in e.request.data]
-    assert intents[0]["extras"]["sms_body"]["value"] == "I'm late, Sorry"
+    assert intents[0]["extras"]["sms_body"]["value"] == "I'm late, Sorry!"

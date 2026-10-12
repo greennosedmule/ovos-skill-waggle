@@ -36,3 +36,14 @@ def test_bad_flags_and_packages_ignored():
 def test_request_key():
     assert request_key("enable", "timer.set") == "enable_timer_set"
     assert request_key("package", "message.compose") == "package_message_compose"
+
+
+def test_capabilities_file(data_home, tmp_path):
+    default = data_home / "ovos-skill-waggle" / "capabilities.json"
+    assert Settings.from_config(None).capabilities_file() == default
+    assert Settings.from_config({"capabilities_file": True}).capabilities_file() == default
+    assert Settings.from_config({"capabilities_file": 5}).capabilities_file() == default
+    assert Settings.from_config({"capabilities_file": False}).capabilities_file() is None
+    assert Settings.from_config({"capabilities_file": ""}).capabilities_file() is None
+    path = str(tmp_path / "phones.json")
+    assert str(Settings.from_config({"capabilities_file": path}).capabilities_file()) == path

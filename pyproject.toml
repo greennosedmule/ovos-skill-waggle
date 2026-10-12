@@ -4,27 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ovos-skill-waggle"
-version = "0.4.0"
+version = "0.5.0"
 description = "Waggle: phone actions for OVOS over HiveMind"
 readme = "SPEC.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
+# The OVOS alphas it's tested with (ovos-core 3.7.4a1); each is a pre-release, so the
+# minimums name one and pip takes pre-releases without --pre.
 dependencies = [
-    "ovos-bus-client>=1.3.6",
-    "ovos-utils>=0.8.2",
-    "ovos-config>=2.0",
-    "ovos-plugin-manager>=2.0",
-    "ovos-workshop>=7.0.6",
-    "ovos-date-parser>=0.29",
-    "ovos-number-parser>=0.19.6",
+    "ovos-bus-client>=2.11.25a1",
+    "ovos-utils>=0.15.4a2",
+    "ovos-config>=3.8.2a1",
+    "ovos-plugin-manager>=2.12.5a1",
+    "ovos-workshop>=9.8.16a1",
+    "ovos-date-parser>=0.34.1a1",
+    "ovos-number-parser>=0.23.2a1",
+    "pydantic>=2",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=8",
-    "ovos-core>=2.1",
-    "padacioso>=1.0",
-    "ovos-utterance-normalizer",
+    "ovos-core>=3.7.4a1",
+    "padacioso>=2.4.3a1",
+    "ovos-utterance-normalizer>=0.2.5a2",
+    "ovos-persona>=0.9.0a28",
+    "ovos-agentic-loop>=0.2.3a3",
 ]
 
 [project.scripts]
@@ -32,6 +37,9 @@ waggle-fake-hub = "waggle.fake_hub:main"
 
 [project.entry-points."opm.pipeline"]
 ovos-waggle-pipeline-plugin = "ovos_skill_waggle.pipeline:WagglePipeline"
+
+[project.entry-points."opm.agents.toolbox"]
+ovos-waggle-tools = "ovos_skill_waggle.tools:WaggleToolBox"
 
 [tool.setuptools.packages.find]
 include = ["waggle*", "ovos_skill_waggle*"]

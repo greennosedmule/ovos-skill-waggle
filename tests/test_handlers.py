@@ -19,8 +19,8 @@ from waggle.messages import (
 from conftest import OTHER_PEER, PEER, capabilities, match_message, utterance
 
 HANDLED = "ovos.utterance.handled"
-# The plugin's report that its handler finished. ovos-core 3 turns it into
-# ovos.utterance.handled; ovos-core 2.x has ovos-workshop emit that directly.
+# The plugin's report that its handler finished, which ovos-core turns into
+# ovos.utterance.handled.
 HANDLER_COMPLETE = "mycroft.skill.handler.complete"
 HANDLER_ERROR = "mycroft.skill.handler.error"
 TIMER = ("timer.set", {"seconds": 600})
@@ -116,7 +116,7 @@ def test_match_message_routes_to_the_phone(bus, recorder, pipeline, phone):
 
 
 def test_phone_origin():
-    # A real session: ovos-bus-client 2.x's Message fills in a malformed one.
+    # A real session: ovos-bus-client's Message fills in a malformed one.
     session = Session("session-1").serialize()
     original = Message("x", {}, {"source": PEER, "destination": "skills", "session": session})
     as_reply = original.reply("y")
@@ -317,7 +317,9 @@ def test_speak_false_failures_are_silent(bus, recorder, pipeline, make_phone, se
         make_phone(capabilities=ask_rules(), ask_answer=AskAnswer.DECLINE)
     response = run(bus, recorder, request(*TIMER, speak=False))
     assert not response.ok and response.summary
-    assert spoken(recorder) == [] and recorder.of(HANDLED) == []
+    # Only an "ask" rule's prompt, which the caller couldn't say in time.
+    assert spoken(recorder) == (["Confirm on your phone."] if setup == "declined" else [])
+    assert recorder.of(HANDLED) == []
 
 
 def test_plain_request_never_emits_handled(bus, recorder, phone):

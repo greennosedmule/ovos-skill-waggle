@@ -81,6 +81,14 @@ class Recorder:
         self.messages.clear()
 
 
+@pytest.fixture(autouse=True)
+def data_home(tmp_path, monkeypatch):
+    """A data directory per test, so no test sees phones another saved in the capability file."""
+    path = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(path))
+    return path
+
+
 @pytest.fixture
 def bus():
     return FakeBus()
@@ -94,6 +102,8 @@ def recorder(bus):
 class TestPipeline(WagglePipeline):
     __test__ = False  # not a test class, despite the name
     fetch_apps_in_background = False
+    # The FakeBus records an utterance as said before ovos-core matches it, if it's sent.
+    wait_for_said_s = 0.0
 
     def __del__(self):
         # ovos-workshop's __del__ shuts the app down again, often at interpreter

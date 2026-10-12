@@ -10,15 +10,19 @@ plugin from loading.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ovos_utils.log import LOG
+from ovos_utils.xdg_utils import xdg_data_home
 
 DEFAULT_RESPONSE_TIMEOUT_S = 5.0
 DEFAULT_ASK_MARGIN_S = 5.0
 # The wait for an "ask" rule when the phone doesn't announce ask_timeout_s.
 # WAGGLE.md has no default; Wiggins uses 15 s.
 DEFAULT_ASK_TIMEOUT_S = 15.0
+# Where the capability cache is kept, under the XDG data directory.
+CAPABILITIES_FILE = Path("ovos-skill-waggle") / "capabilities.json"
 
 
 def request_key(prefix: str, request: str) -> str:
@@ -57,6 +61,22 @@ class Settings:
         """``package_<request>``: restrict the request's intent to one app, or None."""
         value = self.raw.get(request_key("package", request))
         return value.strip() if isinstance(value, str) and value.strip() else None
+
+    def capabilities_file(self) -> Optional[Path]:
+        """``capabilities_file``: where the capability cache is kept, or None to keep it in memory.
+
+        Defaults to ``ovos-skill-waggle/capabilities.json`` in the XDG data
+        directory (``~/.local/share``); ``false`` or ``""`` turns the file off.
+        """
+        value = self.raw.get("capabilities_file", True)
+        if value is True:
+            return xdg_data_home() / CAPABILITIES_FILE
+        if value is False or value == "":
+            return None
+        if isinstance(value, str):
+            return Path(value).expanduser()
+        LOG.warning(f"Waggle: ignoring bad capabilities_file {value!r}, using the default")
+        return xdg_data_home() / CAPABILITIES_FILE
 
     def ask_wait_s(self, phone_ask_timeout_s: Optional[float]) -> float:
         """How long to wait on an "ask" rule: the phone's ask timeout plus the margin."""

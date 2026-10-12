@@ -330,4 +330,5 @@ def test_compose_asks_without_a_cell(bus, recorder, pipeline, make_phone, script
 def test_compose_without_speaking(bus, recorder, full_phone):
     response = run(bus, recorder, "message.compose", {"name": "mom", "body": "hi"}, speak=False)
     assert response.ok
-    assert recorder.of("speak") == []
+    # Texts are an "ask" rule: only its prompt is spoken, not the outcome.
+    assert [m.data["utterance"] for m in recorder.of("speak")] == ["Confirm on your phone."]

@@ -5,13 +5,13 @@ Phone actions for [OpenVoiceOS](https://openvoiceos.org) over [HiveMind](https:/
 - [WAGGLE.md](WAGGLE.md): the protocol, v1.
 - [SPEC.md](SPEC.md): this package: the `waggle` library, the pipeline stage and the request handlers.
 
-Status: **S3**. Alarms, timers, "show alarms", calendar questions ("what's my next appointment"), opening apps, calls and texts work, with follow-up questions ("For how long?", "Which Sam: Sam Lee or Sam Ortiz?"). The LLM persona's hand-off (S4) is next.
+Status: **S4**. Alarms, timers, "show alarms", calendar questions ("what's my next appointment"), opening apps, calls and texts work, with follow-up questions ("For how long?", "Which Sam: Sam Lee or Sam Ortiz?"). Requests it can't parse reach the hub's LLM persona, which can hand them back through tool use: the package's `ovos-waggle-tools` toolbox gives the persona one tool per request, limited to what the asking phone allows.
 
 The phone decides what it shares: contacts, calendar and the app list are read only if the user enables those queries on the phone, and calls and texts open the dialer or messaging app for the user to tap, never placing or sending anything.
 
 ## Install on a hub
 
-Needs ovos-core 2.x or 3.x. Install the package into ovos-core's environment, which registers the `opm.pipeline` plugin `ovos-waggle-pipeline-plugin`, and add its stage to `intents.pipeline` in `mycroft.conf`, right after the converse stage:
+Needs ovos-core 3.x (the OVOS alphas; tested with 3.7.4a1). Install the package into ovos-core's environment, which registers the `opm.pipeline` plugin `ovos-waggle-pipeline-plugin` and the `opm.agents.toolbox` plugin `ovos-waggle-tools`, and add its stage to `intents.pipeline` in `mycroft.conf`, right after the converse stage:
 
 ```json
 "pipeline": ["…", "ovos-converse-pipeline-plugin", "ovos-waggle-pipeline-plugin-high", "…"]
@@ -25,14 +25,18 @@ hivemind-core allow-msg waggle.intent.response <id>
 hivemind-core allow-msg waggle.query.response <id>
 ```
 
-The stage only answers phones that have announced Waggle capabilities, so other satellites keep using the hub's own skills. See SPEC.md "Hub setup".
+The stage only answers phones that have announced Waggle capabilities, so other satellites keep using the hub's own skills. Their capabilities are kept in `~/.local/share/ovos-skill-waggle/capabilities.json`; keep that on a persistent volume so a restart doesn't forget them.
+
+For the persona's tools, make the persona's solver ovos-agentic-loop's `ovos-native-toolcall-loop`, with `"toolboxes": ["ovos-waggle-tools"]` and a tool-capable chat engine as its brain. See SPEC.md "Hub setup" and "The persona (S4)".
 
 ## Develop
 
 ```sh
-uv venv && uv pip install -e '.[test]'
+uv venv && uv pip install --prerelease=allow -e '.[test]'
 .venv/bin/python -m pytest
 ```
+
+The dependencies are OVOS alphas, hence `--prerelease=allow`.
 
 `waggle-fake-hub` sends scripted Waggle requests to a phone through a hub, for testing phone clients.
 

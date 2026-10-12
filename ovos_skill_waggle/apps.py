@@ -6,7 +6,9 @@ the garage door"). The stage must decide at once, so it can't ask the phone
 then. Instead, when a phone that shares ``apps.list`` announces its
 capabilities, the catalog fetches the phone's app labels in the background
 and keeps them by HiveMind client, refreshing them at most every
-``refresh_s``. A match waits briefly for a fetch already under way.
+``refresh_s``. A match waits briefly for a fetch already under way. A phone
+the hub knows only from its capability file (after a restart) has its labels
+fetched on its first utterance instead.
 
 The handler always looks the app up again when it runs, so the catalog only
 gates matching.
@@ -96,6 +98,14 @@ class AppCatalog:
         else:
             threading.Thread(target=self._fetch, args=(phone, origin, entry), daemon=True,
                              name=f"waggle-apps-{phone.client_id}").start()
+
+    def ensure(self, phone: Phone, origin: Message, wait: bool = False) -> None:
+        """Fetch ``phone``'s app labels if it has never been fetched, as after a hub restart
+        that loaded the phone from the capability file."""
+        with self._lock:
+            known = phone.client_id in self._entries
+        if not known:
+            self.refresh(phone, origin, wait)
 
     def _fetch(self, phone: Phone, origin: Message, entry: _Entry) -> None:
         labels = None
