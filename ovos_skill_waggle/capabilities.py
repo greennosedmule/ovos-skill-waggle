@@ -6,7 +6,7 @@ HiveMind tags every message from a client with its peer id,
 ``handle_inject_agent_msg``; the name comes from hivemind-websocket-protocol).
 The session id changes with every HiveMind session, so the cache is keyed by
 the client id, which ``hivemind-core add-client`` assigns once, and keeps the
-latest full peer for addressing the phone later (S4's ``default_phone_peer``).
+latest full peer for addressing the phone.
 
 A peer that isn't in HiveMind's form (a local test client, say) is its own key.
 """

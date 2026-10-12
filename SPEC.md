@@ -6,7 +6,7 @@ Oct 6, 2026 · @greennosedmule
 
 An OVOS pipeline plugin and skill that turn requests like "set an alarm for 6:30" into Waggle messages for Wiggins, the HiveMind Android client: generic Android intents for actions, named queries for reads. It waits for the phone's answer and speaks the result. Parsing and intent-building happen on the hub; the phone only executes.
 
-The message format is the Waggle protocol, defined in [WAGGLE.md](WAGGLE.md); any HiveMind client that speaks it can use this package. Out of scope: anything the hub can do itself without the phone, such as reading a CalDAV calendar or controlling Home Assistant.
+The message format is the Waggle protocol, defined in [WAGGLE.md](WAGGLE.md); any HiveMind client that speaks it can use this package. Out of scope: requests for the phone from anywhere but the phone itself, such as another satellite or a home automation (decided 2026-10-12), and anything the hub can do itself without the phone, such as controlling Home Assistant.
 
 **Who it answers.** A request spoken to a phone is meant for that phone: "set a timer" said to Wiggins should ring on the phone, not on the hub. So for a phone that speaks Waggle, Waggle takes its requests ahead of every other skill, and for every other satellite it does nothing, leaving the stock skills (the alerts skill's hub timers) as they are.
 
@@ -120,11 +120,10 @@ Requests the stage can't parse, such as compound ones ("text Jenny I'm running l
 
 ## Fallbacks and configuration
 
-- **Request from a non-phone satellite** ("set an alarm on my phone" said to a kitchen Pi, S4): send to a configured default phone peer if one is set and online; otherwise say the phone isn't connected. Times are computed in the phone's timezone, not the Pi's. Never fall back silently to a hub-side alarm or timer, since the user asked for the phone.
-- **Phone blocks the action:** for a request spoken to the phone, the stage doesn't match, so the hub's own skills handle it (see "The pipeline stage"). For a request from elsewhere (the persona, a default phone peer), say that the phone doesn't allow it.
+- **Request from another satellite** ("set an alarm on my phone" said to a kitchen speaker): Waggle never sees it (see "Who it answers"), so it goes to the hub's own skills like any other request. Sending a phone requests it didn't make is out of scope.
+- **Phone blocks the action:** for a request spoken to the phone, the stage doesn't match, so the hub's own skills handle it (see "The pipeline stage"). For a request from the persona, say that the phone doesn't allow it.
 - **Ambiguous contact or app:** when `contacts.lookup` or `apps.list` returns several matches, the handler asks which one before building the intent.
 - **Different apps on different phones:** intents are implicit (no package) unless the user configures one, so whatever app the phone has as its default answers.
-- **Phone connected only while its UI is open:** Wiggins is usually connected only during an interaction, so "default phone peer" requests mostly fail with "your phone isn't connected" until push wake-up exists (see Milestones).
 
 Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` → `ovos-waggle-pipeline-plugin` (where ovos-core's `OVOSPipelineFactory` reads a pipeline plugin's config). Per-request keys spell the request with underscores for dots, e.g. `enable_timer_set`, `package_alarm_set`.
 
@@ -132,7 +131,6 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 | --- | --- | --- |
 | `response_timeout_s` | 5 | Wait for `run` intents and queries |
 | `ask_margin_s` | 5 | Added to the phone's `ask_timeout_s` for `ask` intents |
-| `default_phone_peer` | none | HiveMind client to use when a non-phone satellite asks (S4) |
 | `enable_<request>` | true | Per-request enable flags; a disabled request is never matched, and a `waggle:request` for it is answered `blocked` without contacting the phone |
 | `package_<request>` | none | Optional package override per request |
 
@@ -151,7 +149,7 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 1. **S1 — Library:** `waggle` message models, rule matcher, intent builders, fake phone and fake hub. WAGGLE.md frozen as v1. The `waggle:request` and `waggle:request.response` shapes fixed.
 2. **S2 — Actions:** the pipeline stage with capability gating, the capability cache, and the alarm and timer requests with request/response and timeouts. Matches Wiggins M5.
 3. **S3 — Queries:** the contacts, apps and calendar requests with the follow-up question.
-4. **S4 — Reach:** `default_phone_peer`, the persona's tools (with the ovos-persona context patch), and UnifiedPush wake-up once Wiggins supports it.
+4. **S4 — Persona tools:** the persona hands requests it can't answer back to the phone through tool use (see "The persona").
 
 ## Open questions
 
@@ -161,5 +159,5 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 - [x] Matching engine: keywords and patterns, with ovos-date-parser for durations and times (see "The pipeline stage"). No intent engine is needed for three requests; the domain gates keep it from taking non-requests, and the rules still decide. Decided 2026-10-07.
 - [x] Can the handlers ask a follow-up with `get_response` from a bus event handler? Yes, by ovos-workshop 7.0.6's source: `get_response` finds the triggering message with `dig_for_message`, so it works in any handler running for a message, and ovos-core activates the skill on a match, which converse needs. Decided 2026-10-07; confirmed in S3 by an end-to-end test through ovos-core's converse stage. `get_response` forwards the message it's given, so it must be one addressed to the phone (see "Request/response flow").
 - [x] How does a handler read the sender's HiveMind client? hivemind-core sets `context["peer"]` and `context["source"]` to the client's peer id, `<useragent>::<client id>::<client name>::<session id>`, on every message it injects; replies swap `source` but keep `peer`. The cache is keyed by the client id (the second field), which is stable across sessions, and keeps the latest full peer for addressing. Decided 2026-10-07.
-- [ ] Can a skill address a specific HiveMind peer (for `default_phone_peer`), or only reply to the one that spoke? From the source (hivemind-ovos-agent-plugin 0.1.0), any bus message whose `destination` includes a connected peer is delivered to it, and `hive.send.downstream {msg_type, payload, peer}` sends to one; both untested on the hub. To confirm in S4.
-- [ ] Should calendar reads stay hub-side through CalDAV when available, using `waggle.query` only as a fallback? The `calendar.next` result shape is iCalendar-based so either source fits.
+- [x] Can a skill address a specific HiveMind peer, or only reply to the one that spoke? No longer needed: `default_phone_peer` and push wake-up were dropped with requests from other sources (decided 2026-10-12), so Waggle only answers the phone that spoke.
+- [x] Should calendar reads stay hub-side through CalDAV when available, using `waggle.query` only as a fallback? No: calendar reads come from the phone's calendar through `calendar.next`, which fits what the app is for. If that turns out too limiting, the next step is a calendar MCP server for the persona, not CalDAV in Waggle. Decided 2026-10-12.

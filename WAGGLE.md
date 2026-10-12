@@ -154,7 +154,3 @@ Params: `name` (optional filter matched against app labels), `limit` (default 20
 ## Versioning
 
 The version is a single integer, announced in `waggle.capabilities`. Adding optional fields, queries, extra types or error codes doesn't change it. Removing or changing the meaning of anything does. A hub must not send requests to a phone that announced a version it doesn't support.
-
-## Reserved for later
-
-- **Push wake-up:** a hub may wake a disconnected phone through UnifiedPush so it connects and receives pending requests. The payload and the pending-request queue will be specified when Wiggins implements it.

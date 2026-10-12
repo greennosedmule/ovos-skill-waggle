@@ -38,17 +38,14 @@ def _seconds(config: Mapping[str, Any], key: str, default: float) -> float:
 class Settings:
     response_timeout_s: float = DEFAULT_RESPONSE_TIMEOUT_S
     ask_margin_s: float = DEFAULT_ASK_MARGIN_S
-    default_phone_peer: Optional[str] = None  # S4
     raw: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     @classmethod
     def from_config(cls, config: Optional[Mapping[str, Any]]) -> "Settings":
         config = dict(config or {})
-        peer = config.get("default_phone_peer")
         return cls(response_timeout_s=_seconds(config, "response_timeout_s",
                                                DEFAULT_RESPONSE_TIMEOUT_S),
                    ask_margin_s=_seconds(config, "ask_margin_s", DEFAULT_ASK_MARGIN_S),
-                   default_phone_peer=peer if isinstance(peer, str) and peer else None,
                    raw=config)
 
     def enabled(self, request: str) -> bool:
