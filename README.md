@@ -11,7 +11,7 @@ The phone decides what it shares: contacts, calendar and the app list are read o
 
 ## Install on a hub
 
-Needs ovos-core 2.x. Install the package into ovos-core's environment, which registers the `opm.pipeline` plugin `ovos-waggle-pipeline-plugin`, and add its stage to `intents.pipeline` in `mycroft.conf`, right after the converse stage:
+Needs ovos-core 2.x or 3.x. Install the package into ovos-core's environment, which registers the `opm.pipeline` plugin `ovos-waggle-pipeline-plugin`, and add its stage to `intents.pipeline` in `mycroft.conf`, right after the converse stage:
 
 ```json
 "pipeline": ["…", "ovos-converse-pipeline-plugin", "ovos-waggle-pipeline-plugin-high", "…"]

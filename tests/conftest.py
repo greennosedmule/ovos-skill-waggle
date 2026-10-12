@@ -70,6 +70,10 @@ class Recorder:
     def of(self, msg_type: str) -> list[Message]:
         return [m for m in self.messages if m.msg_type == msg_type]
 
+    def speech(self) -> list[Message]:
+        """Speech under either name: ovos-core 3 speaks some of it only as ovos.utterance.speak."""
+        return [m for m in self.messages if m.msg_type in ("speak", "ovos.utterance.speak")]
+
     def types(self) -> list[str]:
         return [m.msg_type for m in self.messages]
 

@@ -97,9 +97,11 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                                         clock=lambda: self.clock())
         self.add_event(CAPABILITIES, self.handle_capabilities, speak_errors=False)
         self.add_event(REQUEST, self.handle_request, speak_errors=False)
-        # is_intent: ovos-workshop emits ovos.utterance.handled when the handler returns.
+        # Ends the phone's turn with ovos.utterance.handled when the handler returns:
+        # ovos-workshop emits it on ovos-core 2.x (is_intent); on 3.x ovos-core does, once
+        # it sees the mycroft.skill.handler.complete or .error that handler_info reports.
         self.add_event(UTTERANCE_REQUEST, self.handle_utterance_request, is_intent=True,
-                       speak_errors=False)
+                       handler_info="mycroft.skill.handler", speak_errors=False)
 
     # --- bus events ----------------------------------------------------------
 

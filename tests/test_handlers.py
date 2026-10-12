@@ -5,8 +5,10 @@ import time
 
 import pytest
 from ovos_bus_client.message import Message
+from ovos_bus_client.session import Session
 
 from ovos_skill_waggle.handlers import phone_origin, spoken_clock, spoken_duration
+from ovos_skill_waggle.pipeline import SKILL_ID
 from ovos_skill_waggle.requests import REQUEST, REQUEST_RESPONSE, RequestResponse
 from waggle.fake_phone import AskAnswer
 from waggle.intents import ACTION_SET_ALARM, ACTION_SET_TIMER, ACTION_SHOW_ALARMS
@@ -17,6 +19,10 @@ from waggle.messages import (
 from conftest import OTHER_PEER, PEER, capabilities, match_message, utterance
 
 HANDLED = "ovos.utterance.handled"
+# The plugin's report that its handler finished. ovos-core 3 turns it into
+# ovos.utterance.handled; ovos-core 2.x has ovos-workshop emit that directly.
+HANDLER_COMPLETE = "mycroft.skill.handler.complete"
+HANDLER_ERROR = "mycroft.skill.handler.error"
 TIMER = ("timer.set", {"seconds": 600})
 
 
@@ -110,14 +116,16 @@ def test_match_message_routes_to_the_phone(bus, recorder, pipeline, phone):
 
 
 def test_phone_origin():
-    original = Message("x", {}, {"source": PEER, "destination": "skills", "session": {"a": 1}})
+    # A real session: ovos-bus-client 2.x's Message fills in a malformed one.
+    session = Session("session-1").serialize()
+    original = Message("x", {}, {"source": PEER, "destination": "skills", "session": session})
     as_reply = original.reply("y")
     for message in (original, as_reply):
         origin = phone_origin(message, PEER)
         assert origin.reply("z").context["destination"] == PEER
         assert origin.reply("z").context["source"] == "skills"
-        assert origin.context["session"] == {"a": 1}
-    # A message from elsewhere (S4: the persona asking for another peer).
+        assert origin.context["session"] == session
+    # A message from elsewhere (S4: the persona's tools).
     elsewhere = Message("x", {}, {"source": "persona", "destination": "skills"})
     assert phone_origin(elsewhere, PEER).reply("z").context["destination"] == PEER
     assert phone_origin(Message("x"), PEER).reply("z").context == \
@@ -315,7 +323,7 @@ def test_speak_false_failures_are_silent(bus, recorder, pipeline, make_phone, se
 def test_plain_request_never_emits_handled(bus, recorder, phone):
     # Whoever made the request owns the utterance and says when it's handled.
     run(bus, recorder, request(*TIMER, speak=True))
-    assert recorder.of(HANDLED) == []
+    assert recorder.of(HANDLED) == [] and recorder.of(HANDLER_COMPLETE) == []
 
 
 @pytest.mark.parametrize("phone_setup", [{}, {"silent": True}, {"launch": ErrorCode.NO_HANDLER}])
@@ -327,10 +335,11 @@ def test_pipeline_request_emits_handled_after_speaking(bus, recorder, pipeline, 
     recorder.clear()
     bus.emit(match_message(utt, m))
     types = recorder.types()
-    assert types.count(HANDLED) == 1
-    assert types.index("speak") < types.index(REQUEST_RESPONSE) < types.index(HANDLED)
-    handled = recorder.of(HANDLED)[0]
-    assert handled.context["destination"] == PEER  # reaches the phone, ending its turn
+    assert types.count(HANDLER_COMPLETE) == 1
+    assert types.index("speak") < types.index(REQUEST_RESPONSE) < types.index(HANDLER_COMPLETE)
+    complete = recorder.of(HANDLER_COMPLETE)[0]
+    assert complete.context["skill_id"] == SKILL_ID  # how ovos-core 3 finds the dispatch it ends
+    assert complete.context["destination"] == PEER  # so the end of the turn reaches the phone
 
 
 def test_handled_even_if_the_handler_breaks(bus, recorder, pipeline, phone, monkeypatch):
@@ -342,7 +351,7 @@ def test_handled_even_if_the_handler_breaks(bus, recorder, pipeline, phone, monk
     m = pipeline.match_high(utt.data["utterances"], "en-US", utt)
     recorder.clear()
     bus.emit(match_message(utt, m))
-    assert recorder.of(HANDLED)
+    assert recorder.of(HANDLER_ERROR)
 
 
 # --- spoken forms ------------------------------------------------------------
