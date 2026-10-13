@@ -54,6 +54,7 @@ def service(bus):
     plugin = service.pipeline_plugins[PLUGIN_ID]
     plugin.__class__ = TestPipeline  # its finalizer, quiet at interpreter exit
     plugin.clock = lambda: NOW
+    plugin.handlers.clock_gap_s = 0.0
     plugin.waggle_settings = plugin.waggle_settings.__class__.from_config(
         {"response_timeout_s": 0.3})
     # The intent parsers drop a registration without a skill_id in the context.

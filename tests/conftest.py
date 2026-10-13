@@ -118,6 +118,7 @@ def make_pipeline(bus):
     def make(config: Optional[dict] = None, now: datetime = NOW):
         pipeline = TestPipeline(bus, dict(FAST if config is None else config))
         pipeline.clock = lambda: now
+        pipeline.handlers.clock_gap_s = 0.0  # tests of the gap set their own
         made.append(pipeline)
         return pipeline
 

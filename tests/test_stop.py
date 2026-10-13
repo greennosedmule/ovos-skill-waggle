@@ -22,7 +22,7 @@ from waggle.intents import (
     ACTION_SNOOZE_ALARM, EXTRA_ALARM_SEARCH_MODE, EXTRA_ALARM_SNOOZE_DURATION, EXTRA_HOUR,
     EXTRA_MESSAGE, EXTRA_MINUTES,
 )
-from waggle.messages import ErrorCode, WaggleError
+from waggle.messages import INTENT, ErrorCode, WaggleError
 
 from conftest import NOW, OTHER_PEER, PEER, capabilities, match_message, utterance
 from test_tools import as_persona, offered, persona_query
@@ -384,3 +384,30 @@ def test_label_answered_with_a_full_time(recorder, pipeline, phone):
 def test_unclear_half_is_asked_again_then_dropped(recorder, pipeline, phone):
     asked = dismiss_by_voice(pipeline, recorder, "cancel my 7 alarm", ["seven", "dunno"])
     assert len(asked) == 2 and phone.log == []
+
+
+# --- spacing Clock intents -------------------------------------------------------
+
+def test_clock_intents_are_spaced(bus, recorder, pipeline, phone, toolbox):
+    """The Clock drops an intent that arrives while a cold start of the last is under way,
+    though the phone answers ok; so they go at least clock_gap_s apart, per phone."""
+    import time
+    pipeline.handlers.clock_gap_s = 0.3
+    sent_at = []
+    bus.on(INTENT, lambda raw: sent_at.append(time.monotonic()))
+    run(bus, recorder, TIMERS_STOP)
+    as_persona(persona_query(), lambda: toolbox.call_tool("set_timer", {"seconds": 60}))
+    assert len(sent_at) == 3
+    assert all(b - a >= 0.29 for a, b in zip(sent_at, sent_at[1:]))
+
+
+def test_other_requests_are_not_held(bus, recorder, pipeline, make_phone):
+    import time
+    phone = make_phone(contacts=[{"fn": "Mom", "tel": [{"value": "+15550001111",
+                                                         "type": "cell"}]}])
+    pipeline.handlers.clock_gap_s = 5.0
+    run(bus, recorder, ALARM_SNOOZE)
+    start = time.monotonic()
+    run(bus, recorder, "contact.call", {"name": "Mom"})
+    assert time.monotonic() - start < 1.0
+    assert phone.log[-1].request.data["action"].endswith("DIAL")

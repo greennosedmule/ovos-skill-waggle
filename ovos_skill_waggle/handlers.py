@@ -19,6 +19,8 @@ for the message the phone sent, so ``Message.reply`` (which S1's
 """
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Callable, Optional
@@ -73,6 +75,15 @@ DAY_EVENTS = 10
 CALENDAR_WITHIN_DAYS = 7
 # Lookups ask the phone for at most this many matches.
 LOOKUP_LIMIT = 10
+
+# The Clock's intents, which one single-instance activity handles. One that arrives while
+# the previous launch is still starting (a cold Clock takes up to about half a second) is
+# dropped, though the phone has already answered ok, so they go at least this far apart.
+CLOCK_ACTIONS = frozenset({
+    intents.ACTION_SET_ALARM, intents.ACTION_SET_TIMER, intents.ACTION_SHOW_ALARMS,
+    intents.ACTION_SHOW_TIMERS, intents.ACTION_DISMISS_TIMER, intents.ACTION_DISMISS_ALARM,
+    intents.ACTION_SNOOZE_ALARM})
+CLOCK_GAP_S = 1.0
 
 
 def phone_origin(message: Message, peer: str) -> Message:
@@ -225,6 +236,10 @@ class RequestHandlers:
         self.ask = ask or (lambda origin, dialog, data: None)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.client = WaggleClient(bus)
+        self.clock_gap_s = CLOCK_GAP_S
+        # When each phone (by client id) last answered a Clock intent, on time.monotonic().
+        self._clock_answered: dict[str, float] = {}
+        self._clock_lock = threading.Lock()
 
     def handle(self, message: Message) -> RequestResponse:
         """Run the request in ``message``; emits and returns the ``waggle:request.response``."""
@@ -302,8 +317,23 @@ class RequestHandlers:
             self._say(origin, confirm_dialog, {})
         LOG.info(f"Waggle: {request.request} -> {phone.peer} ({intent.action}, "
                  f"{decision.mode.value}, waiting {timeout_s}s)")
+        if intent.action in CLOCK_ACTIONS:
+            self._wait_for_clock(phone)
         response = self.client.send_intent(origin, intent, timeout_s)
+        if intent.action in CLOCK_ACTIONS:
+            with self._clock_lock:
+                self._clock_answered[phone.client_id] = time.monotonic()
         return response_outcome(success, response)
+
+    def _wait_for_clock(self, phone: Phone) -> None:
+        """Hold a Clock intent until ``clock_gap_s`` after the phone's last one was answered:
+        ``timers.stop``'s second intent, or the persona's second timer in a row."""
+        with self._clock_lock:
+            last = self._clock_answered.get(phone.client_id)
+        if last is not None:
+            wait = last + self.clock_gap_s - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
 
     def _query(self, origin: Message, phone: Phone, settings: Settings, query: Query) -> dict:
         """Run ``query`` on the phone; its data, or stop with the failure."""
