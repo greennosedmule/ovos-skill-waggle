@@ -66,6 +66,7 @@ def test_timer_stopping(text):
     ("cancel my 7 am alarm", dismiss("time", hour=7, minute=0)),
     ("turn off my 18:30 alarm", dismiss("time", hour=18, minute=30)),
     ("cancel my 7 alarm tomorrow morning", dismiss("time", hour=7, minute=0)),
+    ("cancel my 9 alarm tomorrow night", dismiss("time", hour=21, minute=0)),
     # No a.m. or p.m.: asked, since a wrong guess dismisses nothing or the wrong alarm.
     ("cancel my 6:30 alarm", dismiss("time", "half", hour=6, minute=30)),
     ("cancel the alarm at 7", dismiss("time", "half", hour=7, minute=0)),

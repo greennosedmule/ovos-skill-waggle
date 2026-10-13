@@ -144,6 +144,9 @@ ALARMS = [
     ("wake me up at 7 tomorrow", 7, 0),
     ("set an alarm for tomorrow at 7", 7, 0),
     ("set an alarm for 7 tomorrow", 7, 0),
+    # ... but "tomorrow night" is the evening
+    ("set an alarm for 9 tomorrow night", 21, 0),
+    ("set an alarm for tomorrow night at 9", 21, 0),
     # labels
     ("set an alarm for 6:30 am called work", 6, 30),
     # word orders and fillers

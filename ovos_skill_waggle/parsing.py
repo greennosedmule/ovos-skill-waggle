@@ -234,7 +234,8 @@ def _has_set_intent(text: str, noun: str) -> bool:
 # --- clock times -------------------------------------------------------------
 
 _AM = re.compile(r"\bam\b|\bmorning\b")
-_PM = re.compile(r"\bpm\b|\bafternoon\b|\bevening\b|\btonight\b|\bat night\b|\bin the night\b")
+_PM = re.compile(r"\bpm\b|\bafternoon\b|\bevening\b|\btonight\b|\bat night\b|\bin the night\b|"
+                 r"\btomorrow night\b")
 
 
 @dataclass(frozen=True)
@@ -577,7 +578,7 @@ _ALARM_STOP = re.compile(
     rf"(?P<tail2>.*)$")
 _ALARM_TAIL = re.compile(
     r"^(?: (?:now|right now|for me|(?:that'?s |that is )?(?:ringing|going off|beeping)|"
-    r"(?:for |at )?(?:tomorrow|today|tonight)(?: morning| evening)?|in the morning|"
+    r"(?:for |at )?(?:tomorrow|today|tonight)(?: morning| evening| night)?|in the morning|"
     r"(?:at|for) [\w:]+(?: (?:am|pm|oclock))?|(?:called|named|labell?ed|label|titled) .+))*$")
 # Words before "alarm" that pick the next one rather than name a label.
 _NEXT_ALARM_WORDS = frozenset("""
