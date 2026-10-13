@@ -167,7 +167,8 @@ def dismiss_alarm(mode: str = SEARCH_NEXT, *, hour: Optional[int] = None,
     (a ringing one first), those whose label contains ``label``, or all.
 
     The Clock skips the next ring of an alarm due within 24 hours and stops a
-    ringing or snoozed one; it never deletes an alarm.
+    ringing or snoozed one. ``hour`` is on the 24-hour clock, and IS_PM is never
+    sent: AOSP's Clock would add 12 to an hour below 12 with it.
     """
     extras = {EXTRA_ALARM_SEARCH_MODE: Extra("string", mode)}
     if mode == SEARCH_TIME:

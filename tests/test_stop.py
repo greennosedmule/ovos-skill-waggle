@@ -202,10 +202,10 @@ def test_timers_stop_fully_blocked(bus, recorder, pipeline, make_phone):
 
 
 @pytest.mark.parametrize("params,said", [
-    ({"mode": "next"}, "I've asked your Clock to dismiss your next alarm."),
+    ({"mode": "next"}, "I've asked your Clock to dismiss your next alarm, if it's due in the next 24 hours."),
     ({"mode": "time", "hour": 6, "minute": 30},
-     "I've asked your Clock to dismiss the 6:30 AM alarm."),
-    ({"mode": "label", "label": "work"}, "I've asked your Clock to dismiss the work alarm."),
+     "I've asked your Clock to dismiss the 6:30 AM alarm, if it's due in the next 24 hours."),
+    ({"mode": "label", "label": "work"}, "I've asked your Clock to dismiss the work alarm, if it's due in the next 24 hours."),
 ])
 def test_alarm_dismiss_asks_on_the_phone(bus, recorder, phone, params, said):
     response = run(bus, recorder, ALARM_DISMISS, params)

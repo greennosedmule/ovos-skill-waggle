@@ -150,13 +150,16 @@ TOOLS: Dict[str, Tuple[str, str, type, dict]] = {
                   NoArgs, {}),
     ALARM_DISMISS: ("dismiss_alarm",
                     "Dismiss an alarm on the user's phone: stops it if ringing, otherwise "
-                    "skips its next ring if that's within 24 hours (it never deletes an "
-                    "alarm). Picks the next alarm unless given hour and minute (ask the "
+                    "skips its next ring if that's within 24 hours (a one-time alarm set by "
+                    "voice is then deleted, one the user made is switched off, a repeating "
+                    "one rings on its next day). The result can't be confirmed. Picks the next alarm unless given hour and minute (ask the "
                     "user for the time, and a.m. or p.m., if they named the alarm another "
                     "way), or all. The phone may ask the user to confirm, and opens its "
                     "alarm list.",
                     DismissAlarmArgs, {}),
-    ALARM_SNOOZE: ("snooze_alarm", "Snooze the alarm ringing on the user's phone.",
+    ALARM_SNOOZE: ("snooze_alarm",
+                   "Snooze the alarm ringing on the user's phone. Its Clock may use its own "
+                   "snooze length rather than the one given.",
                    SnoozeArgs, {}),
 }
 BAD_DISMISS = "Give dismiss_alarm hour and minute, or all, or nothing for the next alarm."

@@ -250,7 +250,8 @@ def test_dismiss_alarm_asks_on_the_phone(bus, recorder, service, make_phone):
     assert [i["action"] for i in sent] == [ACTION_DISMISS_ALARM]
     assert sent[0]["extras"]["android.intent.extra.alarm.SEARCH_MODE"]["value"] == "android.time"
     assert [m.data["utterance"] for m in recorder.of("speak")] == [
-        "Confirm on your phone.", "I've asked your Clock to dismiss the 6:30 AM alarm."]
+        "Confirm on your phone.",
+        "I've asked your Clock to dismiss the 6:30 AM alarm, if it's due in the next 24 hours."]
 
 
 def test_phone_without_the_new_rules_falls_through(bus, recorder, service, make_phone):
