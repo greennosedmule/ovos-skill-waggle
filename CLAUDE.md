@@ -133,7 +133,8 @@ detail.
 - **No intent cancels a running timer.** `timers.stop` sends `DISMISS_TIMER`
   (ringing timers only, no UI) and then `SHOW_TIMERS`, in that order: the
   Clock covers Wiggins, which then refuses launches.
-- **Wiggins launches only while it's on screen** (`launch_failed` otherwise),
+- **Wiggins launches only while it's on screen** (`launch_failed` otherwise;
+  on a locked phone it doesn't listen, so nothing reaches the hub),
   and needs `<queries>` entries and rules for every action Waggle sends. New
   default rules reach existing installs only through a Wiggins DB migration;
   until then `unmatched: block` makes the stage leave those requests alone.
