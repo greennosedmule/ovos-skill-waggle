@@ -87,7 +87,7 @@ def test_match_uses_peer_not_source(pipeline, phone):
 
 # --- 2. a request it understands ---------------------------------------------
 
-@pytest.mark.parametrize("text", ["what's the weather", "cancel my alarm", "tell me a joke",
+@pytest.mark.parametrize("text", ["what's the weather", "cancel the smoke alarm", "tell me a joke",
                                   "turn on the den lights", ""])
 def test_unparsed_no_match(pipeline, phone, text):
     assert match(pipeline, text) is None

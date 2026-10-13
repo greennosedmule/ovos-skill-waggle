@@ -128,7 +128,8 @@ def test_persona_sets_a_timer_on_the_phone(bus, recorder, service, make_phone):
     assert phone.log[0].request.data["extras"]["android.intent.extra.alarm.LENGTH"]["value"] == 600
     assert set(ScriptedModel.offered[0]) == {
         "set_alarm", "set_timer", "show_alarms", "get_calendar_events", "open_app",
-        "call_contact", "compose_text_message"}
+        "call_contact", "compose_text_message", "stop_timers", "dismiss_alarm",
+        "snooze_alarm"}
     # Waggle stays quiet; the persona says what happened.
     assert spoken(recorder) == ["Done. ok=True summary='pasta timer set for 10 minutes.' error=None"]
     assert recorder.speech()[0].context["destination"] == PEER

@@ -9,6 +9,10 @@ lookup they're judged by a stand-in intent with the same action, scheme and
 category: a rule never looks at the number or the extras. A rule naming a
 package can still block the real intent; the handler checks that again once
 it has one. ``calendar.next`` is a query only.
+
+``timers.stop`` sends two intents, ``DISMISS_TIMER`` (a ringing timer) and then
+``SHOW_TIMERS`` (so the user can cancel a running one: no intent can), and is
+allowed when either is.
 """
 from __future__ import annotations
 
@@ -23,8 +27,8 @@ from waggle.messages import (
 from waggle.rules import decide_for, query_enabled
 
 from ovos_skill_waggle.requests import (
-    ALARM_SET, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL, MESSAGE_COMPOSE, TIMER_SET,
-    WaggleRequest,
+    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
+    MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, WaggleRequest,
 )
 from ovos_skill_waggle.settings import Settings
 
@@ -45,15 +49,39 @@ def _alarms_show(request: WaggleRequest, settings: Settings) -> Intent:
     return intents.show_alarms(package=settings.package(ALARMS_SHOW))
 
 
+_SEARCH_MODES = {"time": intents.SEARCH_TIME, "next": intents.SEARCH_NEXT,
+                 "label": intents.SEARCH_LABEL, "all": intents.SEARCH_ALL}
+
+
+def _alarm_dismiss(request: WaggleRequest, settings: Settings) -> Intent:
+    p = request.params
+    return intents.dismiss_alarm(_SEARCH_MODES[p["mode"]], hour=p.get("hour"),
+                                 minute=p.get("minute"), label=p.get("label"),
+                                 package=settings.package(ALARM_DISMISS))
+
+
+def _alarm_snooze(request: WaggleRequest, settings: Settings) -> Intent:
+    return intents.snooze_alarm(request.params.get("minutes"),
+                                package=settings.package(ALARM_SNOOZE))
+
+
 INTENT_BUILDERS: dict[str, Callable[[WaggleRequest, Settings], Intent]] = {
     ALARM_SET: _alarm_set,
     TIMER_SET: _timer_set,
     ALARMS_SHOW: _alarms_show,
+    ALARM_DISMISS: _alarm_dismiss,
+    ALARM_SNOOZE: _alarm_snooze,
 }
 
 # The requests this release runs.
 SUPPORTED_REQUESTS = frozenset(INTENT_BUILDERS) | {CALENDAR_NEXT, APP_OPEN, CONTACT_CALL,
-                                                   MESSAGE_COMPOSE}
+                                                   MESSAGE_COMPOSE, TIMERS_STOP}
+
+
+def timers_stop_intents(settings: Settings) -> list[Intent]:
+    """``timers.stop``'s intents, in the order they're sent: silence, then show."""
+    package = settings.package(TIMERS_STOP)
+    return [intents.dismiss_timer(package=package), intents.show_timers(package=package)]
 
 
 def build_intent(request: WaggleRequest, settings: Settings) -> Intent:
@@ -123,6 +151,8 @@ def phone_allows(capabilities: Capabilities, request: WaggleRequest, settings: S
     query = required_query(request)
     if query is not None and not query_enabled(capabilities, query):
         return False
+    if request.request == TIMERS_STOP:
+        return any(decide_for(capabilities, i).allowed for i in timers_stop_intents(settings))
     try:
         intent = precheck_intent(request, settings)
     except ValueError:

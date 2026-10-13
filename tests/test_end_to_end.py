@@ -23,7 +23,9 @@ from ovos_plugin_manager.pipeline import OVOSPipelineFactory  # noqa: E402
 
 from ovos_skill_waggle.pipeline import PLUGIN_ID, SKILL_ID  # noqa: E402
 from ovos_skill_waggle.requests import REQUEST_RESPONSE  # noqa: E402
-from waggle.intents import ACTION_SET_TIMER  # noqa: E402
+from waggle.intents import (  # noqa: E402
+    ACTION_DISMISS_ALARM, ACTION_DISMISS_TIMER, ACTION_SET_TIMER, ACTION_SHOW_TIMERS,
+)
 from waggle.messages import INTENT  # noqa: E402
 
 from conftest import NOW, OTHER_PEER, PEER, TestPipeline, capabilities  # noqa: E402
@@ -38,8 +40,10 @@ PIPELINE = [
 ]
 ALERTS_SKILL = "alerts.stand-in"
 ALERTS_TIMER = f"{ALERTS_SKILL}:set_timer.intent"
+ALERTS_CANCEL = f"{ALERTS_SKILL}:cancel_timer.intent"
 # What a match on it is dispatched as: without the suffix.
 ALERTS_DISPATCH = (ALERTS_TIMER.removesuffix(".intent"),)
+ALERTS_CANCEL_DISPATCH = ALERTS_CANCEL.removesuffix(".intent")
 UNMATCHED = ("ovos.intent.unmatched",)
 HANDLED = "ovos.utterance.handled"
 
@@ -56,6 +60,10 @@ def service(bus):
     bus.emit(Message("padatious:register_intent", {
         "name": ALERTS_TIMER, "lang": "en-US",
         "samples": ["set a timer for {duration}", "start a timer for {duration}"]},
+        {"skill_id": ALERTS_SKILL}))
+    bus.emit(Message("padatious:register_intent", {
+        "name": ALERTS_CANCEL, "lang": "en-US",
+        "samples": ["stop the timer", "cancel my timer", "cancel the timer"]},
         {"skill_id": ALERTS_SKILL}))
     yield service
     service.shutdown()
@@ -201,3 +209,55 @@ def test_inline_message_body_keeps_the_wording_as_said(bus, recorder, service, m
                       "session": session.serialize()}))
     intents = [e.request.data for e in phone.log if "action" in e.request.data]
     assert intents[0]["extras"]["sms_body"]["value"] == "I'm late, Sorry!"
+
+
+# --- stopping timers and dismissing alarms -------------------------------------
+
+def cancels_on_the_hub(recorder):
+    return [m for m in recorder.messages if m.msg_type == ALERTS_CANCEL_DISPATCH]
+
+
+def test_stop_the_timer_from_the_phone(bus, recorder, service, make_phone):
+    """ "Stop the timer" passes OVOS's stop stage (exact words only) and reaches the phone."""
+    phone = make_phone()
+    recorder.clear()
+    say(bus, "stop the timer", PEER)
+    assert [e.request.data["action"] for e in phone.log] == [ACTION_DISMISS_TIMER,
+                                                             ACTION_SHOW_TIMERS]
+    assert cancels_on_the_hub(recorder) == []
+    speak = recorder.of("speak")
+    assert [m.data["utterance"] for m in speak] == [
+        "I've stopped any ringing timer. Here are your timers."]
+    assert speak[0].context["destination"] == PEER
+    handled = recorder.of(HANDLED)
+    assert len(handled) == 1 and handled[0].context["destination"] == PEER
+
+
+def test_stop_the_timer_from_another_satellite_falls_through(bus, recorder, service, make_phone):
+    phone = make_phone()
+    recorder.clear()
+    say(bus, "stop the timer", OTHER_PEER)
+    assert phone.log == [] and recorder.of(INTENT) == []
+    taken = cancels_on_the_hub(recorder)
+    assert len(taken) == 1 and taken[0].context["destination"] == OTHER_PEER
+
+
+def test_dismiss_alarm_asks_on_the_phone(bus, recorder, service, make_phone):
+    phone = make_phone()  # accepts the ask card
+    recorder.clear()
+    say(bus, "turn off my 6:30 am alarm", PEER)
+    sent = [e.request.data for e in phone.log]
+    assert [i["action"] for i in sent] == [ACTION_DISMISS_ALARM]
+    assert sent[0]["extras"]["android.intent.extra.alarm.SEARCH_MODE"]["value"] == "android.time"
+    assert [m.data["utterance"] for m in recorder.of("speak")] == [
+        "Confirm on your phone.", "I've asked your Clock to dismiss the 6:30 AM alarm."]
+
+
+def test_phone_without_the_new_rules_falls_through(bus, recorder, service, make_phone):
+    """A phone that hasn't got the new default rules blocks them, so OVOS keeps them."""
+    phone = make_phone(capabilities=capabilities(
+        rules=[{"action": ACTION_SET_TIMER, "mode": "run"}]))
+    recorder.clear()
+    say(bus, "stop the timer", PEER)
+    assert phone.log == []
+    assert len(cancels_on_the_hub(recorder)) == 1

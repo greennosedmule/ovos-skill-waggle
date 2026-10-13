@@ -89,7 +89,8 @@ def test_default_script_has_the_promised_steps():
     names = {s["name"] for s in DEFAULT_SCRIPT}
     assert {"set alarm", "set timer", "show alarms", "open app", "dial (ask)",
             "forbidden content: URI", "unknown extra type", "unknown query",
-            "action with no rule", "apps.list"} <= names
+            "action with no rule", "apps.list", "dismiss ringing timers", "snooze alarm",
+            "dismiss alarm (ask)", "show timers"} <= names
     assert len(parse_script(DEFAULT_SCRIPT)) == len(DEFAULT_SCRIPT)
 
 
@@ -218,7 +219,7 @@ def test_cli_default_script_text_report(bus, monkeypatch):
     assert any(l.startswith("PASS  set alarm: intent SET_ALARM extras[") and l.endswith("s)")
                for l in step_lines)
     assert any(l.startswith(">>> ") for l in lines)
-    assert lines[-1] == f"{len(DEFAULT_SCRIPT)} steps: 8 passed, 0 failed, 2 reported"
+    assert lines[-1] == f"{len(DEFAULT_SCRIPT)} steps: 11 passed, 0 failed, 3 reported"
     assert "Waiting up to 1s" in err
 
 

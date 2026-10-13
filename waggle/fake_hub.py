@@ -53,7 +53,8 @@ PASS, FAIL, INFO = "PASS", "FAIL", "INFO"
 _ACTION = "android.intent.action."
 _RETURN_TO_PHONE = "If another app opened on the phone, switch back to Wiggins now."
 
-# Covers Wiggins' default rules (WAGGLE.md example plus SHOW_ALARMS and SENDTO sms:)
+# Covers Wiggins' default rules (WAGGLE.md example plus SHOW_ALARMS, SENDTO sms:, and the
+# timer and alarm stop rules)
 # and the rejection rules. Steps that bring another app to the front come last,
 # with a prompt and pause before the next one, since Android limits launches
 # from the background. Outcomes that depend on the user's settings or taps
@@ -90,10 +91,29 @@ DEFAULT_SCRIPT: list[dict] = [
                                                                   "value": "Waggle test"},
                            "android.intent.extra.alarm.SKIP_UI": {"type": "bool", "value": True}}},
      "expect": {"ok": True}},
+    {"name": "dismiss ringing timers",
+     "intent": {"action": _ACTION + "DISMISS_TIMER",
+                "description": "Waggle test: stop ringing timers"},
+     "expect": {"ok": True}},
+    {"name": "snooze alarm",
+     "intent": {"action": _ACTION + "SNOOZE_ALARM", "description": "Waggle test: snooze"},
+     "expect": {"ok": True}},
     {"name": "dial (ask)", "ask": True,
      "prompt": "Wiggins will ask to dial 555-0100: tap Allow or Deny (or let it time out).",
      "intent": {"action": _ACTION + "DIAL", "data": "tel:+15555550100",
                 "description": "Waggle test: dial 555-0100"}},
+    {"name": "dismiss alarm (ask)", "ask": True, "pause_s": 5,
+     "prompt": _RETURN_TO_PHONE + " Wiggins will then ask to dismiss the 'Waggle test' alarm: "
+               "tap Allow or Deny. The Clock opens on its alarms.",
+     "intent": {"action": _ACTION + "DISMISS_ALARM",
+                "description": "Waggle test: dismiss the 'Waggle test' alarm",
+                "extras": {"android.intent.extra.alarm.SEARCH_MODE": {"type": "string",
+                                                                      "value": "android.label"},
+                           "android.intent.extra.alarm.MESSAGE": {"type": "string",
+                                                                  "value": "Waggle test"}}}},
+    {"name": "show timers", "pause_s": 5, "prompt": _RETURN_TO_PHONE,
+     "intent": {"action": _ACTION + "SHOW_TIMERS", "description": "Waggle test: show timers"},
+     "expect": {"ok": True}},
     {"name": "show alarms", "pause_s": 5, "prompt": _RETURN_TO_PHONE,
      "intent": {"action": _ACTION + "SHOW_ALARMS", "description": "Waggle test: show alarms"},
      "expect": {"ok": True}},

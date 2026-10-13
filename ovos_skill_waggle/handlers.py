@@ -35,13 +35,14 @@ from waggle.rules import decide_for
 from ovos_skill_waggle import agenda
 from ovos_skill_waggle.actions import (
     INTENT_BUILDERS, SUPPORTED_REQUESTS, build_intent, precheck_intent, required_query,
-    spoken_number,
+    spoken_number, timers_stop_intents,
 )
 from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
 from ovos_skill_waggle.parsing import PHONE_TYPE_SYNONYMS, choose
 from ovos_skill_waggle.requests import (
-    ALARM_SET, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL, MESSAGE_COMPOSE, TIMER_SET,
-    UNREACHABLE, RequestResponse, WaggleRequest, response_message,
+    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
+    MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, UNREACHABLE, RequestResponse, WaggleRequest,
+    response_message,
 )
 from ovos_skill_waggle.settings import Settings
 
@@ -153,6 +154,17 @@ def success_outcome(request: WaggleRequest) -> Outcome:
         return Outcome("timer_set", data)
     if request.request == ALARMS_SHOW:
         return Outcome("alarms_show")
+    if request.request == ALARM_DISMISS:
+        # Hedged: the Clock tells only a voice interactor whether an alarm matched, so "ok"
+        # means Android took the intent. The Clock opens on its alarms, which shows the rest.
+        mode = p["mode"]
+        if mode == "time":
+            return Outcome("alarm_dismissed_time", {"time": spoken_clock(p["hour"], p["minute"])})
+        if mode == "label":
+            return Outcome("alarm_dismissed_label", {"label": p["label"]})
+        return Outcome(f"alarm_dismissed_{mode}")
+    if request.request == ALARM_SNOOZE:
+        return Outcome("alarm_snoozed")
     return Outcome("done")
 
 
@@ -256,8 +268,8 @@ class RequestHandlers:
             return self._launch(origin, request, phone, settings, build_intent(request, settings),
                                 success_outcome(request))
         run = {CALENDAR_NEXT: self._calendar_next, APP_OPEN: self._app_open,
-               CONTACT_CALL: self._contact_call,
-               MESSAGE_COMPOSE: self._message_compose}[request.request]
+               CONTACT_CALL: self._contact_call, MESSAGE_COMPOSE: self._message_compose,
+               TIMERS_STOP: self._timers_stop}[request.request]
         return run(request, origin, phone, settings)
 
     def _precheck(self, request: WaggleRequest, phone: Phone, settings: Settings) -> None:
@@ -376,6 +388,38 @@ class RequestHandlers:
         return Outcome("calendar_list", {
             "count": len(events),
             "events": agenda.spoken_list([agenda.spoken_event(e, now, tz) for e in events])})
+
+    # --- timers.stop -----------------------------------------------------------
+
+    def _timers_stop(self, request: WaggleRequest, origin: Message, phone: Phone,
+                     settings: Settings) -> Outcome:
+        """Silence ringing timers, then show the timers, each if the phone allows it.
+
+        No intent cancels a running timer, so the timers screen is how the user
+        does that. A Clock without ``DISMISS_TIMER`` (``no_handler``) still gets
+        the timers shown; a "no" on an ask card ends it.
+        """
+        done: dict[str, bool] = {}
+        failure: Optional[Outcome] = None
+        for intent in timers_stop_intents(settings):
+            if not decide_for(phone.capabilities, intent).allowed:
+                continue
+            outcome = self._launch(origin, request, phone, settings, intent, Outcome("done"))
+            done[intent.action] = outcome.ok
+            if not outcome.ok:
+                failure = outcome
+                if outcome.error in (ErrorCode.DECLINED.value, ErrorCode.TIMEOUT.value,
+                                     UNREACHABLE):
+                    return outcome
+        dismissed = done.get(intents.ACTION_DISMISS_TIMER, False)
+        shown = done.get(intents.ACTION_SHOW_TIMERS, False)
+        if dismissed and shown:
+            return Outcome("timers_stopped")
+        if dismissed:
+            return Outcome("timers_dismissed")
+        if shown:
+            return Outcome("timers_shown")
+        return failure or Outcome.failure(ErrorCode.BLOCKED.value, "blocked")
 
     # --- app.open --------------------------------------------------------------
 

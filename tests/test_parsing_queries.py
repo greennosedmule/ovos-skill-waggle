@@ -148,8 +148,7 @@ def test_incomplete(text, request_name, params, missing):
     assert parse_request(text, "en-US", AFTERNOON) is None
 
 
-@pytest.mark.parametrize("text", ["cancel my timer", "stop the alarm", "set an alarm for Friday",
-                                  "set a timer for 0 seconds"])
+@pytest.mark.parametrize("text", ["set an alarm for Friday", "set a timer for 0 seconds"])
 def test_not_incomplete(text):
     assert parsed(text) is None
 

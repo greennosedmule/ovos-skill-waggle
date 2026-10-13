@@ -23,11 +23,21 @@ CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER"
 ACTION_SET_ALARM = "android.intent.action.SET_ALARM"
 ACTION_SET_TIMER = "android.intent.action.SET_TIMER"
 ACTION_SHOW_ALARMS = "android.intent.action.SHOW_ALARMS"
+ACTION_SHOW_TIMERS = "android.intent.action.SHOW_TIMERS"        # API 26
+ACTION_DISMISS_TIMER = "android.intent.action.DISMISS_TIMER"    # API 28
+ACTION_DISMISS_ALARM = "android.intent.action.DISMISS_ALARM"    # API 23
+ACTION_SNOOZE_ALARM = "android.intent.action.SNOOZE_ALARM"      # API 23
 EXTRA_HOUR = "android.intent.extra.alarm.HOUR"
 EXTRA_MINUTES = "android.intent.extra.alarm.MINUTES"
 EXTRA_MESSAGE = "android.intent.extra.alarm.MESSAGE"
 EXTRA_SKIP_UI = "android.intent.extra.alarm.SKIP_UI"
 EXTRA_LENGTH = "android.intent.extra.alarm.LENGTH"
+EXTRA_ALARM_SEARCH_MODE = "android.intent.extra.alarm.SEARCH_MODE"
+EXTRA_ALARM_SNOOZE_DURATION = "android.intent.extra.alarm.SNOOZE_DURATION"
+# AlarmClock.ALARM_SEARCH_MODE_*: which alarms DISMISS_ALARM picks.
+SEARCH_TIME, SEARCH_NEXT, SEARCH_LABEL, SEARCH_ALL = (
+    "android.time", "android.next", "android.label", "android.all")
+SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES = 1, 60
 
 # The SMS body extra the stock messaging apps read with ACTION_SENDTO.
 EXTRA_SMS_BODY = "sms_body"
@@ -138,6 +148,56 @@ def set_timer(seconds: int, *, label: Optional[str] = None, skip_ui: bool = True
 
 def show_alarms(*, package: Optional[str] = None, id: Optional[str] = None) -> Intent:
     return _intent(ACTION_SHOW_ALARMS, "Show alarms", id, package)
+
+
+def show_timers(*, package: Optional[str] = None, id: Optional[str] = None) -> Intent:
+    """``SHOW_TIMERS``: the Clock's timers, for the user to tap (there's no intent to cancel one)."""
+    return _intent(ACTION_SHOW_TIMERS, "Show timers", id, package)
+
+
+def dismiss_timer(*, package: Optional[str] = None, id: Optional[str] = None) -> Intent:
+    """``DISMISS_TIMER``: silence every ringing timer. A running one isn't touched."""
+    return _intent(ACTION_DISMISS_TIMER, "Stop ringing timers", id, package)
+
+
+def dismiss_alarm(mode: str = SEARCH_NEXT, *, hour: Optional[int] = None,
+                  minute: Optional[int] = None, label: Optional[str] = None,
+                  package: Optional[str] = None, id: Optional[str] = None) -> Intent:
+    """``DISMISS_ALARM`` for the alarms ``mode`` picks: one at ``hour``:``minute``, the next
+    (a ringing one first), those whose label contains ``label``, or all.
+
+    The Clock skips the next ring of an alarm due within 24 hours and stops a
+    ringing or snoozed one; it never deletes an alarm.
+    """
+    extras = {EXTRA_ALARM_SEARCH_MODE: Extra("string", mode)}
+    if mode == SEARCH_TIME:
+        hour, minute = _int(hour, "hour", 0, 23), _int(minute, "minute", 0, 59)
+        extras[EXTRA_HOUR] = Extra("int", hour)
+        extras[EXTRA_MINUTES] = Extra("int", minute)
+        description = f"Dismiss the {_clock(hour, minute)} alarm"
+    elif mode == SEARCH_LABEL:
+        label = _text(label, "label")
+        extras[EXTRA_MESSAGE] = Extra("string", label)
+        description = f'Dismiss the alarm labeled "{label}"'
+    elif mode == SEARCH_NEXT:
+        description = "Dismiss the next alarm"
+    elif mode == SEARCH_ALL:
+        description = "Dismiss all alarms"
+    else:
+        raise ValueError(f"mode must be one of the AlarmClock search modes, got {mode!r}")
+    return _intent(ACTION_DISMISS_ALARM, description, id, package, extras=extras)
+
+
+def snooze_alarm(minutes: Optional[int] = None, *, package: Optional[str] = None,
+                 id: Optional[str] = None) -> Intent:
+    """``SNOOZE_ALARM``: snooze the ringing alarm, for ``minutes`` if the Clock honours it."""
+    extras = {}
+    description = "Snooze the alarm"
+    if minutes is not None:
+        minutes = _int(minutes, "minutes", SNOOZE_MIN_MINUTES, SNOOZE_MAX_MINUTES)
+        extras[EXTRA_ALARM_SNOOZE_DURATION] = Extra("int", minutes)
+        description += f" for {minutes} minute{'' if minutes == 1 else 's'}"
+    return _intent(ACTION_SNOOZE_ALARM, description, id, package, extras=extras)
 
 
 def launch_app(package: str, *, label: Optional[str] = None, id: Optional[str] = None) -> Intent:

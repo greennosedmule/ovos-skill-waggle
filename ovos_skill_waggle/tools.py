@@ -39,8 +39,8 @@ from ovos_skill_waggle.actions import phone_allows
 from ovos_skill_waggle.capabilities import Phone, peer_of
 from ovos_skill_waggle.pipeline import WagglePipeline, find_phone
 from ovos_skill_waggle.requests import (
-    ALARM_SET, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL, MESSAGE_COMPOSE, REQUEST,
-    TIMER_SET, UNREACHABLE, RequestResponse, WaggleRequest,
+    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
+    MESSAGE_COMPOSE, REQUEST, TIMER_SET, TIMERS_STOP, UNREACHABLE, RequestResponse, WaggleRequest,
 )
 
 TOOLBOX_ID = "ovos-waggle-tools"
@@ -93,6 +93,23 @@ class MessageArgs(ToolArguments):
                                                      "sent.")
 
 
+class DismissAlarmArgs(ToolArguments):
+    hour: Optional[int] = Field(None, ge=0, le=23,
+                                description="The alarm's hour, 0-23, with minute, to pick it "
+                                            "by time.")
+    minute: Optional[int] = Field(None, ge=0, le=59, description="The alarm's minute, 0-59.")
+    label: Optional[str] = Field(None, min_length=1,
+                                 description="Part of the alarm's label, to pick it by name "
+                                             "(the phone's match is case-sensitive).")
+    all: bool = Field(False, description="Dismiss every alarm due in the next 24 hours.")
+
+
+class SnoozeArgs(ToolArguments):
+    minutes: Optional[int] = Field(None, ge=1, le=60,
+                                   description="Snooze length, if the user said one; many "
+                                               "Clock apps use their own default instead.")
+
+
 class Outcome(ToolOutput):
     ok: bool = Field(..., description="Whether the phone did it.")
     summary: str = Field(..., description="What happened, in words.")
@@ -125,7 +142,34 @@ TOOLS: Dict[str, Tuple[str, str, type, dict]] = {
                       "Open a text message to a contact (or a number) on the phone, with "
                       "the text filled in. The user taps send; nothing is sent until then.",
                       MessageArgs, {"name": "5550100", "body": "-"}),
+    TIMERS_STOP: ("stop_timers",
+                  "Silence any ringing timer on the user's phone and show its timers. A "
+                  "running timer can't be cancelled remotely: the user taps it on the "
+                  "timers screen.",
+                  NoArgs, {}),
+    ALARM_DISMISS: ("dismiss_alarm",
+                    "Dismiss an alarm on the user's phone: stops it if ringing, otherwise "
+                    "skips its next ring if that's within 24 hours (it never deletes an "
+                    "alarm). Picks the next alarm unless given hour and minute, a label, or "
+                    "all. The phone may ask the user to confirm, and opens its alarm list.",
+                    DismissAlarmArgs, {}),
+    ALARM_SNOOZE: ("snooze_alarm", "Snooze the alarm ringing on the user's phone.",
+                   SnoozeArgs, {}),
 }
+BAD_DISMISS = "Give dismiss_alarm one of: hour and minute, a label, or all; or nothing for the next."
+
+
+def _dismiss_params(params: dict) -> Optional[dict]:
+    """The alarm.dismiss params for the tool's arguments, or None if they pick more than one way."""
+    has_time = "hour" in params or "minute" in params
+    ways = [has_time, "label" in params, bool(params.get("all"))]
+    if sum(ways) > 1 or (has_time and not ("hour" in params and "minute" in params)):
+        return None
+    if has_time:
+        return {"mode": "time", "hour": params["hour"], "minute": params["minute"]}
+    if "label" in params:
+        return {"mode": "label", "label": params["label"]}
+    return {"mode": "all" if params.get("all") else "next"}
 
 
 # --- the toolbox ---------------------------------------------------------------
@@ -174,6 +218,10 @@ class WaggleToolBox(ToolBox):
         if phone is None:
             LOG.warning(f"Waggle: {request} tool called, but not for a Waggle phone")
             return Outcome(ok=False, summary=NOT_A_PHONE, error=UNREACHABLE)
+        if request == ALARM_DISMISS:
+            params = _dismiss_params(params)
+            if params is None:
+                return Outcome(ok=False, summary=BAD_DISMISS, error="bad_request")
         # The handler validates the params, and answers bad_request for any it rejects.
         data = {"request": request, "params": params, "speak": False}
         LOG.info(f"Waggle: persona tool {request} {params} for {phone.client_id}")

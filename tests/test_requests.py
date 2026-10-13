@@ -17,7 +17,8 @@ def assert_bad_request(fn, *args, **kwargs):
 def test_names():
     assert (r.REQUEST, r.REQUEST_RESPONSE) == ("waggle:request", "waggle:request.response")
     assert r.REQUEST_NAMES == ("alarm.set", "timer.set", "alarms.show", "calendar.next",
-                               "app.open", "contact.call", "message.compose")
+                               "app.open", "contact.call", "message.compose", "timers.stop",
+                               "alarm.dismiss", "alarm.snooze")
     assert r.UNREACHABLE == "unreachable"
 
 

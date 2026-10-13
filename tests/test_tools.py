@@ -13,7 +13,8 @@ from waggle.messages import APPS_LIST, CALENDAR_NEXT, INTENT
 from conftest import NOW, OTHER_PEER, PEER, capabilities, match_message, utterance
 
 ALL_TOOLS = {"set_alarm", "set_timer", "show_alarms", "get_calendar_events", "open_app",
-             "call_contact", "compose_text_message"}
+             "call_contact", "compose_text_message", "stop_timers", "dismiss_alarm",
+             "snooze_alarm"}
 SAM_LEE = {"fn": "Sam Lee", "tel": [{"value": "+15550003333", "type": "cell"}]}
 SAM_ORTIZ = {"fn": "Sam Ortiz", "tel": [{"value": "+15550004444", "type": "work"}]}
 

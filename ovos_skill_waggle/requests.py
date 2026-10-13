@@ -27,9 +27,15 @@ CALENDAR_NEXT = "calendar.next"
 APP_OPEN = "app.open"
 CONTACT_CALL = "contact.call"
 MESSAGE_COMPOSE = "message.compose"
+TIMERS_STOP = "timers.stop"
+ALARM_DISMISS = "alarm.dismiss"
+ALARM_SNOOZE = "alarm.snooze"
 
 REQUEST_NAMES = (ALARM_SET, TIMER_SET, ALARMS_SHOW, CALENDAR_NEXT, APP_OPEN, CONTACT_CALL,
-                 MESSAGE_COMPOSE)
+                 MESSAGE_COMPOSE, TIMERS_STOP, ALARM_DISMISS, ALARM_SNOOZE)
+
+# Which alarms alarm.dismiss picks (AlarmClock's search modes).
+DISMISS_MODES = ("time", "next", "label", "all")
 
 # No response from the phone, or the phone isn't connected; not a WAGGLE.md code.
 UNREACHABLE = "unreachable"
@@ -75,7 +81,27 @@ _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
                    "type": (False, lambda v: v in PHONE_TYPES, "cell, home, work or other")},
     MESSAGE_COMPOSE: {"name": (True, _is_text, "a non-empty string"),
                       "body": (True, _is_text, "a non-empty string")},
+    TIMERS_STOP: {},
+    # "time" needs hour and minute, "label" a label; see _check_dismiss.
+    ALARM_DISMISS: {"mode": (False, lambda v: v in DISMISS_MODES, "time, next, label or all"),
+                    "hour": (False, _int(0, 23), "an integer 0–23"),
+                    "minute": (False, _int(0, 59), "an integer 0–59"),
+                    "label": (False, _is_text, "a non-empty string")},
+    ALARM_SNOOZE: {"minutes": (False, _int(1, 60), "an integer 1–60")},
 }
+
+
+def _check_dismiss(params: dict) -> None:
+    """The mode defaults to "next"; "time" needs hour and minute, "label" a label."""
+    mode = params.setdefault("mode", "next")
+    if mode == "time" and not ("hour" in params and "minute" in params):
+        raise bad_request("alarm.dismiss mode 'time' needs 'hour' and 'minute'")
+    if mode == "label" and "label" not in params:
+        raise bad_request("alarm.dismiss mode 'label' needs 'label'")
+    for name in ("hour", "minute", "label"):
+        wanted = mode == "time" if name != "label" else mode == "label"
+        if not wanted:
+            params.pop(name, None)
 
 
 def _check_params(request: str, params: Any) -> dict:
@@ -110,6 +136,8 @@ class WaggleRequest:
         if not isinstance(self.speak, bool):
             raise bad_request("'speak' must be a boolean")
         object.__setattr__(self, "params", _check_params(self.request, self.params))
+        if self.request == ALARM_DISMISS:
+            _check_dismiss(self.params)
 
     @classmethod
     def from_dict(cls, d: Any) -> "WaggleRequest":

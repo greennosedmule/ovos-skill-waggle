@@ -41,6 +41,11 @@ DEFAULT_CAPABILITIES = Capabilities.from_dict({
         {"action": "android.intent.action.SET_ALARM", "mode": "run"},
         {"action": "android.intent.action.SET_TIMER", "mode": "run"},
         {"action": "android.intent.action.SHOW_ALARMS", "mode": "run"},
+        {"action": "android.intent.action.SHOW_TIMERS", "mode": "run"},
+        {"action": "android.intent.action.DISMISS_TIMER", "mode": "run"},
+        {"action": "android.intent.action.SNOOZE_ALARM", "mode": "run"},
+        # A wrongly dismissed wake-up alarm costs a lot: the phone asks.
+        {"action": "android.intent.action.DISMISS_ALARM", "mode": "ask"},
         {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER",
          "mode": "run"},
         {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},

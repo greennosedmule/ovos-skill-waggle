@@ -81,8 +81,6 @@ def test_timer(text, seconds, label):
 @pytest.mark.parametrize("text", [
     "set a timer",                       # no length: a follow-up question, S3
     "start a timer",
-    "cancel the timer",
-    "stop the timer",
     "how much time is left on my timer",
     "how long is left on the pasta timer",
     "pause my timer",
@@ -220,11 +218,6 @@ def test_relative_alarm_uses_the_phones_clock():
 @pytest.mark.parametrize("text", [
     "set an alarm",                  # no time: a follow-up question, S3
     "set an alarm for tomorrow",
-    "cancel my alarm",
-    "delete the 6:30 alarm",
-    "turn off the alarm",
-    "snooze the alarm",
-    "stop the alarm",
     "change my alarm to 7",
     "the fire alarm is beeping at 3",
     "the smoke alarm went off at 5",
@@ -265,7 +258,8 @@ def test_alarms_show(text):
 
 @pytest.mark.parametrize("text", ["cancel my alarms", "delete all alarms", "turn off my alarms"])
 def test_alarms_not_shown(text):
-    assert parsed(text) is None
+    # Dismissed instead (see test_stop.py), never shown.
+    assert parsed(text)[0] == "alarm.dismiss"
 
 
 # --- languages and helpers ---------------------------------------------------

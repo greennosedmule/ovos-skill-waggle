@@ -14,7 +14,9 @@ Clock times are read by the patterns below, with ovos-date-parser's
 against ``now`` in the phone's timezone. Alarms carry only a wall-clock hour
 and minute (Android's ``SET_ALARM`` has no date and rings at the next
 matching time), so "tomorrow" only steers a.m. versus p.m., and an alarm for
-another day ("Friday at 7", "every weekday") isn't taken.
+another day ("Friday at 7", "every weekday") isn't taken. Stopping and
+cancelling timers, dismissing alarms and snoozing are read in their own
+section below.
 
 English only (v1); other languages never match.
 """
@@ -31,8 +33,8 @@ from ovos_number_parser import numbers_to_digits
 from ovos_utils.log import LOG
 
 from ovos_skill_waggle.requests import (
-    ALARM_SET, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL, MESSAGE_COMPOSE, TIMER_SET,
-    WaggleRequest,
+    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
+    MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, WaggleRequest,
 )
 from waggle.intents import TIMER_MAX_S, TIMER_MIN_S
 
@@ -550,6 +552,95 @@ def _parse_app(text: str) -> Optional[Parsed]:
     return Parsed(APP_OPEN, {"name": name}, check_app=m.group("app") is None)
 
 
+# --- stopping, dismissing and snoozing -------------------------------------------
+#
+# What Android's Clock can do (SPEC.md "Stopping timers and alarms"): silence ringing
+# timers and show the timers (no intent cancels a running one), skip an alarm's next ring,
+# and snooze a ringing alarm. A bare "stop" isn't matched here: OVOS's stop stage runs
+# first and takes it.
+
+_STOP_VERB = (r"(?:stop|cancel|silence|dismiss|turn off|shut off|switch off|end|delete|remove|"
+              r"clear|kill|quiet|disable|skip)")
+_TIMER_NOUN = r"(?:timers?|count ?downs?)"
+_STOP_TAIL = (r"(?: (?:now|right now|for me|off|(?:that'?s |that is )?(?:ringing|going off|"
+              r"beeping)|(?:for|on) (?:the |my )?[\w']+(?: [\w']+)?))?")
+_TIMER_STOP = re.compile(
+    rf"^{_STOP_VERB} (?:(?:the|my|all|all the|all my|that|this|those|these|every) )?"
+    rf"(?:[\w']+ ){{0,3}}?{_TIMER_NOUN}{_STOP_TAIL}$|"
+    rf"^(?:turn|switch|shut) (?:(?:the|my|that|all|all the|all my) )?(?:[\w']+ ){{0,3}}?"
+    rf"{_TIMER_NOUN} off$")
+_ALARM_STOP = re.compile(
+    rf"^{_STOP_VERB} (?P<what>(?:[\w':]+ ){{0,4}}?)alarm(?P<plural>s?)\b(?P<tail>.*)$|"
+    rf"^(?:turn|switch|shut) (?P<what2>(?:[\w':]+ ){{0,4}}?)alarm(?P<plural2>s?) off"
+    rf"(?P<tail2>.*)$")
+_ALARM_TAIL = re.compile(
+    r"^(?: (?:now|right now|for me|(?:that'?s |that is )?(?:ringing|going off|beeping)|"
+    r"(?:for |at )?(?:tomorrow|today|tonight)(?: morning| evening)?|in the morning|"
+    r"(?:at|for) [\w:]+(?: (?:am|pm|oclock))?|(?:called|named|labell?ed|label|titled) .+))*$")
+# Words before "alarm" that pick the next one rather than name a label.
+_NEXT_ALARM_WORDS = frozenset("""
+    the my a an this that next current ringing morning wake up wakeup tomorrow tomorrow's today's
+    tonight's upcoming first
+""".split())
+# Alarms that aren't the Clock's.
+_NOT_A_CLOCK_ALARM = re.compile(r"\b(?:smoke|fire|car|burglar|security|house|intruder|"
+                                r"carbon monoxide|co)\b")
+_SNOOZE = re.compile(r"^(?:hit |press |tap )?snooze(?: (?:the|my|that) alarm| it| alarm)?"
+                     r"(?: for (?P<length>.+))?$")
+
+
+def _parse_timers_stop(text: str) -> Optional[Parsed]:
+    return Parsed(TIMERS_STOP, {}) if _TIMER_STOP.match(text) else None
+
+
+def _parse_alarm_dismiss(text: str, now: datetime) -> Optional[Parsed]:
+    m = _ALARM_STOP.match(text)
+    if not m or _OTHER_DAY.search(text) or _NOT_A_CLOCK_ALARM.search(text):
+        return None
+    what = (m.group("what") if m.group("what") is not None else m.group("what2")) or ""
+    plural = (m.group("plural") if m.group("what") is not None else m.group("plural2")) or ""
+    tail = (m.group("tail") if m.group("what") is not None else m.group("tail2")) or ""
+    if not _ALARM_TAIL.match(tail):
+        return None
+    if re.search(r"\b(?:all|every|each)\b", what) or (plural and not re.search(r"\d", text)):
+        return Parsed(ALARM_DISMISS, {"mode": "all"})
+    named = re.search(r"\b(?:called|named|labell?ed|label|titled) (.+)$", tail)
+    if named:
+        return Parsed(ALARM_DISMISS, {"mode": "label", "label": named.group(1).strip()})
+    clock = _clock_from_patterns(f"{what} {tail}")
+    if clock is None:
+        bare = re.fullmatch(r"(?:(?:the|my) )?(\d{1,2}) ", what)  # "my 7 alarm"
+        if bare and 0 < int(bare.group(1)) <= 23:
+            clock = ClockTime(int(bare.group(1)), 0, int(bare.group(1)) > 12)
+    if clock is not None:
+        hour, minute = _resolve(clock, text, now)
+        return Parsed(ALARM_DISMISS, {"mode": "time", "hour": hour, "minute": minute})
+    words = [w for w in what.split() if w not in _NEXT_ALARM_WORDS]
+    if not words:
+        return Parsed(ALARM_DISMISS, {"mode": "next"})
+    if len(words) <= 3 and not re.search(r"\d", what):
+        return Parsed(ALARM_DISMISS, {"mode": "label", "label": " ".join(words)})
+    return None
+
+
+def _parse_snooze(text: str) -> Optional[Parsed]:
+    m = _SNOOZE.match(text)
+    if not m:
+        return None
+    if m.group("length") is None:
+        return Parsed(ALARM_SNOOZE, {})
+    duration = find_duration(m.group("length"))
+    if duration is None or duration.before or duration.after or duration.seconds % 60:
+        return None
+    minutes = duration.seconds // 60
+    return Parsed(ALARM_SNOOZE, {"minutes": minutes}) if 1 <= minutes <= 60 else None
+
+
+def _parse_stop(text: str, now: datetime) -> Optional[Parsed]:
+    """Stopping or cancelling timers, dismissing alarms, snoozing; ``text`` digitized."""
+    return _parse_timers_stop(text) or _parse_alarm_dismiss(text, now) or _parse_snooze(text)
+
+
 # --- requests ----------------------------------------------------------------
 
 def _parse_timer(text: str) -> Optional[Parsed]:
@@ -599,6 +690,9 @@ def parse_utterance(utterance: str, lang: str, now: datetime) -> Optional[Parsed
     text = normalize(utterance)
     if not text:
         return None
+    stop = _parse_stop(digitize(text), now)
+    if stop is not None:
+        return stop
     # "what time is my alarm set for" asks, it doesn't set.
     asks_only = not re.search(_SET_VERB, _sub(r"\balarms? (?:is |are )?set\b", "alarm", text))
     if _SHOW_ALARMS.search(text) and not _ALARM_NOT.search(text) and asks_only:

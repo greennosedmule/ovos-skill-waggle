@@ -235,7 +235,8 @@ def test_announce(bus):
 def test_default_capabilities_cover_wiggins_defaults():
     actions = {r.action for r in DEFAULT_CAPABILITIES.rules}
     assert {A + "SET_ALARM", A + "SET_TIMER", A + "SHOW_ALARMS", A + "MAIN", A + "DIAL",
-            A + "SENDTO"} <= actions
+            A + "SENDTO", A + "SHOW_TIMERS", A + "DISMISS_TIMER", A + "SNOOZE_ALARM",
+            A + "DISMISS_ALARM"} <= actions
     assert DEFAULT_CAPABILITIES.unmatched is Mode.BLOCK
     assert DEFAULT_CAPABILITIES.ask_timeout_s == 15
 
