@@ -33,7 +33,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 from ovos_bus_client.message import Message, dig_for_message
 from ovos_plugin_manager.templates.agent_tools import AgentTool, ToolArguments, ToolBox, ToolOutput
 from ovos_utils.log import LOG
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from ovos_skill_waggle.actions import phone_allows
 from ovos_skill_waggle.capabilities import Phone, peer_of
@@ -94,14 +94,15 @@ class MessageArgs(ToolArguments):
 
 
 class DismissAlarmArgs(ToolArguments):
+    # An argument it doesn't know (a "label") must not quietly become "the next alarm".
+    model_config = ConfigDict(extra="forbid")
+
     hour: Optional[int] = Field(None, ge=0, le=23,
                                 description="The alarm's hour, 0-23, with minute, to pick it "
                                             "by time.")
     minute: Optional[int] = Field(None, ge=0, le=59, description="The alarm's minute, 0-59.")
-    label: Optional[str] = Field(None, min_length=1,
-                                 description="Part of the alarm's label, to pick it by name "
-                                             "(the phone's match is case-sensitive).")
-    all: bool = Field(False, description="Dismiss every alarm due in the next 24 hours.")
+    all: bool = Field(False, description="Dismiss every alarm due in the next 24 hours; the "
+                                         "user is asked to confirm.")
 
 
 class SnoozeArgs(ToolArguments):
@@ -150,25 +151,29 @@ TOOLS: Dict[str, Tuple[str, str, type, dict]] = {
     ALARM_DISMISS: ("dismiss_alarm",
                     "Dismiss an alarm on the user's phone: stops it if ringing, otherwise "
                     "skips its next ring if that's within 24 hours (it never deletes an "
-                    "alarm). Picks the next alarm unless given hour and minute, a label, or "
-                    "all. The phone may ask the user to confirm, and opens its alarm list.",
+                    "alarm). Picks the next alarm unless given hour and minute (ask the "
+                    "user for the time, and a.m. or p.m., if they named the alarm another "
+                    "way), or all. The phone may ask the user to confirm, and opens its "
+                    "alarm list.",
                     DismissAlarmArgs, {}),
     ALARM_SNOOZE: ("snooze_alarm", "Snooze the alarm ringing on the user's phone.",
                    SnoozeArgs, {}),
 }
-BAD_DISMISS = "Give dismiss_alarm one of: hour and minute, a label, or all; or nothing for the next."
+BAD_DISMISS = "Give dismiss_alarm hour and minute, or all, or nothing for the next alarm."
 
 
 def _dismiss_params(params: dict) -> Optional[dict]:
-    """The alarm.dismiss params for the tool's arguments, or None if they pick more than one way."""
+    """The alarm.dismiss params for the tool's arguments, or None if they mix two ways.
+
+    There's no label argument: the Clock matches labels case-sensitively, and a
+    label in two alarms opens a picker that crashes on Android 16.
+    """
     has_time = "hour" in params or "minute" in params
-    ways = [has_time, "label" in params, bool(params.get("all"))]
-    if sum(ways) > 1 or (has_time and not ("hour" in params and "minute" in params)):
+    if (has_time and params.get("all")) or (has_time and not ("hour" in params
+                                                              and "minute" in params)):
         return None
     if has_time:
         return {"mode": "time", "hour": params["hour"], "minute": params["minute"]}
-    if "label" in params:
-        return {"mode": "label", "label": params["label"]}
     return {"mode": "all" if params.get("all") else "next"}
 
 

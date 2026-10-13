@@ -24,7 +24,7 @@ from waggle.intents import (
 )
 from waggle.messages import ErrorCode, WaggleError
 
-from conftest import NOW, OTHER_PEER, PEER, capabilities, utterance
+from conftest import NOW, OTHER_PEER, PEER, capabilities, match_message, utterance
 from test_tools import as_persona, offered, persona_query
 
 # 14:10 on the fake phone's clock, as the stage reads times.
@@ -33,11 +33,13 @@ AFTERNOON = NOW.astimezone(ZoneInfo("America/Chicago"))
 
 def parsed(text):
     p = parse_utterance(text, "en-US", AFTERNOON)
-    return p and (p.request, p.params)
+    if p is None:
+        return None
+    return (p.request, p.params, p.missing) if p.missing else (p.request, p.params)
 
 
-def dismiss(mode, **params):
-    return (ALARM_DISMISS, {"mode": mode, **params})
+def dismiss(mode, missing=None, **params):
+    return (ALARM_DISMISS, {"mode": mode, **params}) + ((missing,) if missing else ())
 
 
 # --- parsing -------------------------------------------------------------------
@@ -62,12 +64,16 @@ def test_timer_stopping(text):
     ("cancel my alarm for tomorrow", dismiss("next")),
     ("turn off my 6:30 am alarm", dismiss("time", hour=6, minute=30)),
     ("cancel my 7 am alarm", dismiss("time", hour=7, minute=0)),
-    # No a.m. or p.m.: the next time the clock shows it, as for setting one.
-    ("cancel my 6:30 alarm", dismiss("time", hour=18, minute=30)),
-    ("cancel the alarm at 7", dismiss("time", hour=19, minute=0)),
-    ("cancel my 7 alarm", dismiss("time", hour=19, minute=0)),
-    ("cancel my work alarm", dismiss("label", label="work")),
-    ("cancel the alarm called gym", dismiss("label", label="gym")),
+    ("turn off my 18:30 alarm", dismiss("time", hour=18, minute=30)),
+    ("cancel my 7 alarm tomorrow morning", dismiss("time", hour=7, minute=0)),
+    # No a.m. or p.m.: asked, since a wrong guess dismisses nothing or the wrong alarm.
+    ("cancel my 6:30 alarm", dismiss("time", "half", hour=6, minute=30)),
+    ("cancel the alarm at 7", dismiss("time", "half", hour=7, minute=0)),
+    ("cancel my 7 alarm", dismiss("time", "half", hour=7, minute=0)),
+    # A label: its time is asked for (labels match case-sensitively, and one in two alarms
+    # opens the Clock's picker, which crashes on Android 16).
+    ("cancel my work alarm", dismiss("time", "alarm_time", label="work")),
+    ("cancel the alarm called gym", dismiss("time", "alarm_time", label="gym")),
     ("cancel all my alarms", dismiss("all")),
     ("cancel my alarms", dismiss("all")),
     ("delete all alarms", dismiss("all")),
@@ -200,7 +206,6 @@ def test_timers_stop_fully_blocked(bus, recorder, pipeline, make_phone):
     ({"mode": "time", "hour": 6, "minute": 30},
      "I've asked your Clock to dismiss the 6:30 AM alarm."),
     ({"mode": "label", "label": "work"}, "I've asked your Clock to dismiss the work alarm."),
-    ({"mode": "all"}, "I've asked your Clock to dismiss all your alarms."),
 ])
 def test_alarm_dismiss_asks_on_the_phone(bus, recorder, phone, params, said):
     response = run(bus, recorder, ALARM_DISMISS, params)
@@ -208,6 +213,35 @@ def test_alarm_dismiss_asks_on_the_phone(bus, recorder, phone, params, said):
     # The default rule is ask: the user confirms on the phone first.
     assert spoken(recorder) == ["Confirm on your phone.", said]
     assert actions(phone) == [ACTION_DISMISS_ALARM]
+
+
+ALL_SAID = "I've asked your Clock to dismiss every alarm due in the next 24 hours."
+
+
+def test_dismiss_all_reads_back_before_the_phone_asks(bus, recorder, phone):
+    response = run(bus, recorder, ALARM_DISMISS, {"mode": "all"})
+    assert response == {"ok": True, "summary": ALL_SAID}
+    assert spoken(recorder) == [
+        "That dismisses every alarm due in the next 24 hours. Confirm on your phone.", ALL_SAID]
+
+
+@pytest.mark.parametrize("answers,sent", [(["yes"], True), (["no"], False),
+                                          (["what?", "go ahead"], True), ([None], False)])
+def test_dismiss_all_asks_aloud_when_the_phone_wont(bus, recorder, pipeline, make_phone,
+                                                    answers, sent):
+    phone = make_phone(capabilities=capabilities(
+        rules=[{"action": ACTION_DISMISS_ALARM, "mode": "run"}]))
+    asked = []
+
+    def ask(origin, dialog, data):
+        asked.append(dialog)
+        return answers[len(asked) - 1]
+
+    pipeline.handlers.ask = ask
+    response = run(bus, recorder, ALARM_DISMISS, {"mode": "all"})
+    assert asked[0] == "ask_dismiss_all"
+    assert response["ok"] is sent
+    assert actions(phone) == ([ACTION_DISMISS_ALARM] if sent else [])
 
 
 def test_alarm_dismiss_declined(bus, recorder, pipeline, make_phone):
@@ -268,7 +302,6 @@ def test_tools_offered_by_their_rules(toolbox, pipeline, make_phone):
     ({}, {EXTRA_ALARM_SEARCH_MODE: "android.next"}),
     ({"hour": 6, "minute": 30}, {EXTRA_ALARM_SEARCH_MODE: "android.time", EXTRA_HOUR: 6,
                                  EXTRA_MINUTES: 30}),
-    ({"label": "Work"}, {EXTRA_ALARM_SEARCH_MODE: "android.label", EXTRA_MESSAGE: "Work"}),
     ({"all": True}, {EXTRA_ALARM_SEARCH_MODE: "android.all"}),
 ])
 def test_dismiss_alarm_tool(toolbox, pipeline, make_phone, args, mode_extras):
@@ -279,12 +312,11 @@ def test_dismiss_alarm_tool(toolbox, pipeline, make_phone, args, mode_extras):
     assert {k: v["value"] for k, v in extras.items()} == mode_extras
 
 
-@pytest.mark.parametrize("args", [{"hour": 6}, {"hour": 6, "minute": 0, "label": "x"},
-                                  {"label": "x", "all": True}])
+@pytest.mark.parametrize("args", [{"hour": 6}, {"minute": 0}, {"hour": 6, "minute": 0, "all": True}])
 def test_dismiss_alarm_tool_refuses_mixed_arguments(toolbox, pipeline, make_phone, args):
     phone = make_phone()
     result = as_persona(persona_query(), lambda: toolbox.call_tool("dismiss_alarm", args))
-    assert not result.ok and result.error == "bad_request" and "label" in result.summary
+    assert not result.ok and result.error == "bad_request" and "hour" in result.summary
     assert phone.log == []
 
 
@@ -297,3 +329,58 @@ def test_stop_and_snooze_tools(toolbox, recorder, pipeline, make_phone):
     assert as_persona(persona_query(), lambda: toolbox.call_tool("snooze_alarm", {})).ok
     assert actions(phone) == [ACTION_DISMISS_TIMER, ACTION_SHOW_TIMERS, ACTION_SNOOZE_ALARM]
     assert recorder.speech() == []  # the persona says it in its own words
+
+
+def test_no_label_argument(toolbox, pipeline, make_phone):
+    make_phone()
+    with pytest.raises(ValueError):  # unknown arguments are refused by the tool's schema
+        as_persona(persona_query(), lambda: toolbox.call_tool("dismiss_alarm", {"label": "x"}))
+
+
+# --- follow-up questions -------------------------------------------------------
+
+def dismiss_by_voice(pipeline, recorder, text, answers):
+    asked = []
+
+    def ask(origin, dialog, data):
+        asked.append(pipeline._render(dialog, data))
+        return answers[len(asked) - 1]
+
+    pipeline._ask = ask
+    utt = utterance(text)
+    m = pipeline.match_high([text], "en-US", utt)
+    recorder.clear()
+    pipeline.handle_utterance_request(match_message(utt, m))
+    return asked
+
+
+def sent_time(phone):
+    extras = phone.log[-1].request.data["extras"]
+    return extras[EXTRA_HOUR]["value"], extras[EXTRA_MINUTES]["value"]
+
+
+def test_bare_hour_asks_which_half(recorder, pipeline, phone):
+    asked = dismiss_by_voice(pipeline, recorder, "cancel my 7 alarm", ["the morning one"])
+    assert asked == ["The 7:00 AM or the 7:00 PM alarm?"]
+    assert sent_time(phone) == (7, 0)
+
+
+def test_label_asks_for_the_time_then_the_half(recorder, pipeline, phone):
+    asked = dismiss_by_voice(pipeline, recorder, "cancel my work alarm", ["6:30", "p.m."])
+    assert asked == ["What time is your work alarm set for?",
+                     "The 6:30 AM or the 6:30 PM alarm?"]
+    assert sent_time(phone) == (18, 30)
+    extras = phone.log[-1].request.data["extras"]
+    assert extras[EXTRA_ALARM_SEARCH_MODE]["value"] == "android.time"
+    assert EXTRA_MESSAGE not in extras
+
+
+def test_label_answered_with_a_full_time(recorder, pipeline, phone):
+    asked = dismiss_by_voice(pipeline, recorder, "cancel the alarm called gym", ["6 am"])
+    assert asked == ["What time is your gym alarm set for?"]
+    assert sent_time(phone) == (6, 0)
+
+
+def test_unclear_half_is_asked_again_then_dropped(recorder, pipeline, phone):
+    asked = dismiss_by_voice(pipeline, recorder, "cancel my 7 alarm", ["seven", "dunno"])
+    assert len(asked) == 2 and phone.log == []

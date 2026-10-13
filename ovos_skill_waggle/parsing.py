@@ -357,6 +357,8 @@ def alarm_time(text: str, now: datetime) -> Optional[tuple[int, int]]:
 MISSING_DURATION = "duration"  # timer.set without a length
 MISSING_TIME = "time"          # alarm.set without a time
 MISSING_BODY = "body"          # message.compose without the message
+MISSING_HALF = "half"          # alarm.dismiss at an hour said without a.m. or p.m.
+MISSING_ALARM_TIME = "alarm_time"  # alarm.dismiss for an alarm named by its label
 
 
 @dataclass(frozen=True)
@@ -604,23 +606,87 @@ def _parse_alarm_dismiss(text: str, now: datetime) -> Optional[Parsed]:
         return None
     if re.search(r"\b(?:all|every|each)\b", what) or (plural and not re.search(r"\d", text)):
         return Parsed(ALARM_DISMISS, {"mode": "all"})
+    # A label isn't matched by its label: the Clock compares labels case-sensitively, and
+    # one that matches two alarms opens a picker that crashes on Android 16. Its time is
+    # asked for instead, which picks exactly one.
     named = re.search(r"\b(?:called|named|labell?ed|label|titled) (.+)$", tail)
     if named:
-        return Parsed(ALARM_DISMISS, {"mode": "label", "label": named.group(1).strip()})
+        return _ask_alarm_time(named.group(1).strip())
     clock = _clock_from_patterns(f"{what} {tail}")
     if clock is None:
         bare = re.fullmatch(r"(?:(?:the|my) )?(\d{1,2}) ", what)  # "my 7 alarm"
         if bare and 0 < int(bare.group(1)) <= 23:
             clock = ClockTime(int(bare.group(1)), 0, int(bare.group(1)) > 12)
     if clock is not None:
-        hour, minute = _resolve(clock, text, now)
-        return Parsed(ALARM_DISMISS, {"mode": "time", "hour": hour, "minute": minute})
+        return _dismiss_at(clock, text, now)
     words = [w for w in what.split() if w not in _NEXT_ALARM_WORDS]
     if not words:
         return Parsed(ALARM_DISMISS, {"mode": "next"})
     if len(words) <= 3 and not re.search(r"\d", what):
-        return Parsed(ALARM_DISMISS, {"mode": "label", "label": " ".join(words)})
+        return _ask_alarm_time(" ".join(words))
     return None
+
+
+def _ask_alarm_time(label: str) -> Parsed:
+    return Parsed(ALARM_DISMISS, {"mode": "time", "label": label}, missing=MISSING_ALARM_TIME)
+
+
+def _half_said(text: str) -> bool:
+    """Whether a.m. or p.m. is said or implied ("morning", "tonight", "tomorrow", "wake")."""
+    return bool(_AM.search(text) or _PM.search(text) or _WAKE.search(text)
+                or re.search(r"\btomorrow\b", text))
+
+
+def _dismiss_at(clock: ClockTime, text: str, now: datetime) -> Parsed:
+    """Dismiss the alarm at ``clock``; an hour without a.m. or p.m. asks which.
+
+    Guessing would dismiss nothing when wrong, or the wrong alarm, so it's asked.
+    """
+    if not clock.exact and not _half_said(text):
+        return Parsed(ALARM_DISMISS, {"mode": "time", "hour": clock.hour % 12 or 12,
+                                      "minute": clock.minute}, missing=MISSING_HALF)
+    hour, minute = _resolve(clock, text, now)
+    return Parsed(ALARM_DISMISS, {"mode": "time", "hour": hour, "minute": minute})
+
+
+def answer_half(answer: str, hour: int) -> Optional[int]:
+    """The 24-hour hour an answer to "The 7:00 AM or the 7:00 PM alarm?" picks, or None."""
+    text = normalize(answer)
+    am = bool(_AM.search(text)) or bool(re.search(r"\b(?:first|1st)\b", text))
+    pm = bool(_PM.search(text)) or bool(re.search(r"\b(?:second|2nd|night|last)\b", text))
+    if am == pm:
+        return None
+    return hour % 12 + (12 if pm else 0)
+
+
+def answer_dismiss_time(answer: str, now: datetime) -> Optional[dict]:
+    """The time in an answer to "What time is your work alarm set for?".
+
+    An hour without a.m. or p.m. comes back with ``"then": MISSING_HALF``, so
+    that's asked next.
+    """
+    text = digitize(normalize(answer))
+    if re.match(r"\d", text):
+        text = f"at {text}"  # a bare "7" reads as a clock time, not a count
+    clock = _clock_from_patterns(text)
+    if clock is None:
+        return None
+    parsed = _dismiss_at(clock, text, now)
+    params = {"hour": parsed.params["hour"], "minute": parsed.params["minute"]}
+    return {**params, "then": MISSING_HALF} if parsed.missing else params
+
+
+_YES = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please do|confirm|"
+                  r"correct|right|absolutely|of course)\b")
+_NO = re.compile(r"^(?:no|nope|don't|do not|never mind|nevermind|stop|cancel|wait)\b")
+
+
+def answer_yes(answer: str) -> Optional[bool]:
+    """True for "yes, go ahead", False for "no", None for anything else."""
+    text = normalize(answer)
+    if _NO.match(text):
+        return False
+    return True if _YES.match(text) else None
 
 
 def _parse_snooze(text: str) -> Optional[Parsed]:

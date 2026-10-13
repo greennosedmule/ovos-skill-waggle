@@ -38,7 +38,7 @@ from ovos_skill_waggle.actions import (
     spoken_number, timers_stop_intents,
 )
 from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
-from ovos_skill_waggle.parsing import PHONE_TYPE_SYNONYMS, choose
+from ovos_skill_waggle.parsing import PHONE_TYPE_SYNONYMS, answer_yes, choose
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
     MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, UNREACHABLE, RequestResponse, WaggleRequest,
@@ -264,6 +264,8 @@ class RequestHandlers:
             return Outcome.failure(UNREACHABLE, "not_connected")
 
         self._precheck(request, phone, settings)
+        if request.request == ALARM_DISMISS and request.params["mode"] == "all":
+            return self._dismiss_all(request, origin, phone, settings)
         if request.request in INTENT_BUILDERS:
             return self._launch(origin, request, phone, settings, build_intent(request, settings),
                                 success_outcome(request))
@@ -287,7 +289,8 @@ class RequestHandlers:
             raise _Stop(Outcome.failure(ErrorCode.BLOCKED.value, "blocked"))
 
     def _launch(self, origin: Message, request: WaggleRequest, phone: Phone, settings: Settings,
-                intent: Intent, success: Outcome) -> Outcome:
+                intent: Intent, success: Outcome,
+                confirm_dialog: str = "confirm_on_phone") -> Outcome:
         """Send ``intent`` and wait for the phone; ``success`` if it ran."""
         decision = decide_for(phone.capabilities, intent)
         if not decision.allowed:
@@ -296,7 +299,7 @@ class RequestHandlers:
         if decision.mode is Mode.ASK:
             # Said even when the caller speaks the outcome itself (the persona): the user
             # has to act now, and the outcome only comes once they have.
-            self._say(origin, "confirm_on_phone", {})
+            self._say(origin, confirm_dialog, {})
         LOG.info(f"Waggle: {request.request} -> {phone.peer} ({intent.action}, "
                  f"{decision.mode.value}, waiting {timeout_s}s)")
         response = self.client.send_intent(origin, intent, timeout_s)
@@ -388,6 +391,29 @@ class RequestHandlers:
         return Outcome("calendar_list", {
             "count": len(events),
             "events": agenda.spoken_list([agenda.spoken_event(e, now, tz) for e in events])})
+
+    # --- alarm.dismiss, all ----------------------------------------------------
+
+    def _dismiss_all(self, request: WaggleRequest, origin: Message, phone: Phone,
+                     settings: Settings) -> Outcome:
+        """Dismiss every alarm due within a day, but only once the user has confirmed.
+
+        The Clock does it without a picker or a question of its own. With an
+        "ask" rule the phone's card is the confirmation, and what it does is
+        said first; with "run", the user is asked out loud.
+        """
+        intent = build_intent(request, settings)
+        decision = decide_for(phone.capabilities, intent)
+        if decision.allowed and decision.mode is not Mode.ASK:
+            for attempt in range(2):
+                answer = self.ask(origin, "ask_dismiss_all", {})
+                yes = None if answer is None else answer_yes(answer)
+                if yes is True:
+                    break
+                if yes is False or answer is None or attempt == 1:
+                    return Outcome.failure(ErrorCode.DECLINED.value, "declined")
+        return self._launch(origin, request, phone, settings, intent, success_outcome(request),
+                            confirm_dialog="confirm_dismiss_all")
 
     # --- timers.stop -----------------------------------------------------------
 

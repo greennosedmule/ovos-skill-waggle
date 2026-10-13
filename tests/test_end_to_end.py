@@ -261,3 +261,27 @@ def test_phone_without_the_new_rules_falls_through(bus, recorder, service, make_
     say(bus, "stop the timer", PEER)
     assert phone.log == []
     assert len(cancels_on_the_hub(recorder)) == 1
+
+
+def test_named_alarm_asks_its_time_through_converse(bus, recorder, service, make_phone):
+    """ "Cancel my work alarm" asks its time (labels don't match reliably), then dismisses
+    by time, after the phone's own confirmation."""
+    import threading
+
+    phone = make_phone()
+    recorder.clear()
+    first = threading.Thread(target=say, args=(bus, "cancel my work alarm", PEER), daemon=True)
+    first.start()
+    question = _wait_for_question(recorder)
+    assert question.data["utterance"] == "What time is your work alarm set for?"
+    bus.emit(Message("recognizer_loop:utterance", {"utterances": ["6:30 am"], "lang": "en-US"},
+                     {"source": PEER, "peer": PEER, "destination": "skills",
+                      "session": question.context["session"]}))
+    first.join(10)
+    assert not first.is_alive()
+    sent = [e.request.data for e in phone.log]
+    assert [i["action"] for i in sent] == [ACTION_DISMISS_ALARM]
+    extras = {k: v["value"] for k, v in sent[0]["extras"].items()}
+    assert extras == {"android.intent.extra.alarm.SEARCH_MODE": "android.time",
+                      "android.intent.extra.alarm.HOUR": 6,
+                      "android.intent.extra.alarm.MINUTES": 30}

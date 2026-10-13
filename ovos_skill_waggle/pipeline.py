@@ -57,10 +57,11 @@ from waggle.messages import CAPABILITIES, WaggleError
 from ovos_skill_waggle.actions import phone_allows
 from ovos_skill_waggle.apps import AppCatalog
 from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
-from ovos_skill_waggle.handlers import RequestHandlers, phone_origin
+from ovos_skill_waggle.handlers import RequestHandlers, phone_origin, spoken_clock
 from ovos_skill_waggle.parsing import (
-    MISSING_BODY, MISSING_DURATION, MISSING_TIME, Parsed, answer_alarm_time, answer_duration,
-    original_wording, parse_utterance,
+    MISSING_ALARM_TIME, MISSING_BODY, MISSING_DURATION, MISSING_HALF, MISSING_TIME, Parsed,
+    answer_alarm_time, answer_dismiss_time, answer_duration, answer_half, original_wording,
+    parse_utterance,
 )
 from ovos_skill_waggle.requests import MESSAGE_COMPOSE, REQUEST, WaggleRequest
 from ovos_skill_waggle.said import SaidUtterances
@@ -75,9 +76,10 @@ PHONE_UTTERANCE = "recognizer_loop:utterance"
 
 # The question for each missing piece, and stand-ins that let the rule check run without it.
 ASK_DIALOGS = {MISSING_DURATION: "ask_duration", MISSING_TIME: "ask_time",
-               MISSING_BODY: "ask_body"}
+               MISSING_BODY: "ask_body", MISSING_HALF: "ask_half",
+               MISSING_ALARM_TIME: "ask_alarm_time"}
 PLACEHOLDERS = {MISSING_DURATION: {"seconds": 60}, MISSING_TIME: {"hour": 7, "minute": 0},
-                MISSING_BODY: {"body": "-"}}
+                MISSING_BODY: {"body": "-"}, MISSING_ALARM_TIME: {"hour": 7, "minute": 0}}
 
 # The plugins running in this process, for the persona's tools, which ovos-persona
 # loads without a bus or any other way to reach the plugin.
@@ -161,31 +163,57 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         self.handlers.handle(message)
 
     def ask_for_missing(self, message: Message, missing: str) -> Optional[dict]:
-        """Ask for what the request lacks; its params with the answer, or None."""
+        """Ask for what the request lacks; its params with the answers, or None.
+
+        An answer can need another question: "What time is your work alarm set
+        for?" … "7" asks "The 7:00 AM or the 7:00 PM alarm?" next.
+        """
         data = message.data
         peer = peer_of(message)
         origin = phone_origin(message, peer) if peer else message
         params = dict(data.get("params") or {})
+        phone = self.capabilities.get(peer)
+        while missing is not None:
+            value = self._ask_until_read(origin, missing, params, data.get("utterance") or "",
+                                         phone)
+            if value is None:
+                return None
+            missing = value.pop("then", None)
+            params.update(value)
+        return params
+
+    def _ask_until_read(self, origin: Message, missing: str, params: dict, asked: str,
+                        phone: Optional[Phone]) -> Optional[dict]:
+        """Ask for ``missing`` (twice at most); the params the answer gives, or None."""
         dialog = ASK_DIALOGS.get(missing)
         if dialog is None:
             LOG.warning(f"Waggle: can't ask for {missing!r}")
             return None
-        phone = self.capabilities.get(peer)
         for attempt in range(2):
-            answer = self._ask(origin, dialog, {})
+            answer = self._ask(origin, dialog, self.ask_data(missing, params))
             if answer is None:
                 self._speak(origin, self._render("declined", {}), "declined", {})
                 return None
-            value = self.read_answer(missing, answer, data.get("utterance") or "", phone)
+            value = self.read_answer(missing, answer, asked, phone, params)
             if value is not None:
-                return {**params, **value}
+                return value
             if attempt == 0:
                 self._speak(origin, self._render("not_understood", {}), "not_understood", {})
         self._speak(origin, self._render("declined", {}), "declined", {})
         return None
 
+    @staticmethod
+    def ask_data(missing: str, params: dict) -> dict:
+        """What the question for ``missing`` says back: the label, the two halves of the day."""
+        if missing == MISSING_HALF:
+            hour, minute = params["hour"] % 12, params["minute"]
+            return {"am": spoken_clock(hour, minute), "pm": spoken_clock(hour + 12, minute)}
+        if missing == MISSING_ALARM_TIME:
+            return {"label": params.get("label", "")}
+        return {}
+
     def read_answer(self, missing: str, answer: str, asked: str,
-                    phone: Optional[Phone]) -> Optional[dict]:
+                    phone: Optional[Phone], params: Optional[dict] = None) -> Optional[dict]:
         """The params an answer to the follow-up question gives, or None."""
         if missing == MISSING_DURATION:
             seconds = answer_duration(answer)
@@ -196,6 +224,11 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         if missing == MISSING_BODY:
             body = answer.strip()
             return {"body": body} if body else None
+        if missing == MISSING_HALF:
+            hour = answer_half(answer, (params or {}).get("hour", 0))
+            return {"hour": hour} if hour is not None else None
+        if missing == MISSING_ALARM_TIME:
+            return answer_dismiss_time(answer, self.phone_now(phone))
         return None
 
     # --- matching ------------------------------------------------------------

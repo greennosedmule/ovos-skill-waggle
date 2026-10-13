@@ -12,7 +12,8 @@ it has one. ``calendar.next`` is a query only.
 
 ``timers.stop`` sends two intents, ``DISMISS_TIMER`` (a ringing timer) and then
 ``SHOW_TIMERS`` (so the user can cancel a running one: no intent can), and is
-allowed when either is.
+allowed when either is. Dismissing comes first: it shows nothing, while the
+Clock that ``SHOW_TIMERS`` opens covers the phone app, which then can't launch.
 """
 from __future__ import annotations
 
