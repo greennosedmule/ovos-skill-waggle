@@ -8,7 +8,7 @@ An OVOS pipeline plugin and skill that turn requests like "set an alarm for 6:30
 
 The message format is the Waggle protocol, defined in [WAGGLE.md](WAGGLE.md); any HiveMind client that speaks it can use this package. Out of scope: requests for the phone from anywhere but the phone itself, such as another satellite or a home automation (decided 2026-10-12), and anything the hub can do itself without the phone, such as controlling Home Assistant. Reminders are out of scope too: "remind me …" goes to the hub's own skills as usual, and Clock-backed reminders (labelled timers and alarms) were tried and dropped (decided 2026-10-12, see "Open questions").
 
-**Who it answers.** A request spoken to a phone is meant for that phone: "set a timer" said to Wiggins should ring on the phone, not on the hub. So for a phone that speaks Waggle, Waggle takes its requests ahead of every other skill, and for every other satellite it does nothing, leaving the stock skills (the alerts skill's hub timers) as they are.
+**Who it answers.** A request spoken to a phone is meant for that phone: "set a timer" said to Wiggins should ring on the phone, not on the hub. So for a phone that speaks Waggle, Waggle takes its requests ahead of every other skill, and for every other satellite it does nothing, leaving the hub's own skills (such as the alerts skill's hub timers, where installed) as they are.
 
 ## Repository layout
 
@@ -46,12 +46,12 @@ A request is the bus message `waggle:request`:
 | Request | Params | Waggle messages sent | User hears |
 | --- | --- | --- | --- |
 | `alarm.set` | `hour`, `minute` (phone's wall clock), optional `label` | intent `SET_ALARM`, extras HOUR, MINUTES, SKIP\_UI | "Alarm set for 6:30 AM." |
-| `timer.set` | `seconds`, optional `label` | intent `SET_TIMER`, extras LENGTH, SKIP\_UI | "10-minute timer started." |
+| `timer.set` | `seconds`, optional `label` | intent `SET_TIMER`, extras LENGTH, SKIP\_UI | "Timer set for 10 minutes." |
 | `alarms.show` | — | intent `SHOW_ALARMS` | "Here are your alarms." |
 | `calendar.next` | optional `count` (1–10, default 1) or `day` (`YYYY-MM-DD` on the phone's calendar) | query `calendar.next` | "Next on your calendar: Dentist, tomorrow at 2 PM." |
 | `app.open` | `name` | query `apps.list` {name}, then intent `MAIN` + `LAUNCHER` with the matched package | "Opening Camera." |
 | `contact.call` | `name`, optional `type` (`cell`, `home`, `work`, `other`) | query `contacts.lookup`, then intent `DIAL` with a `tel:` URI | "Dialing Mom. Tap call to connect." |
-| `message.compose` | `name`, `body` | query `contacts.lookup`, then intent `SENDTO` with an `smsto:` URI and `sms_body` | "Message ready. Tap send on your phone." |
+| `message.compose` | `name`, `body` | query `contacts.lookup`, then intent `SENDTO` with an `smsto:` URI and `sms_body` | "Message to Mom ready. Tap send on your phone." |
 | `timers.stop` | — | intent `DISMISS_TIMER`, then intent `SHOW_TIMERS`, each if the phone allows it | "I've stopped any ringing timer. Here are your timers." |
 | `alarm.dismiss` | `mode` (`next`, the default; `time` with `hour` and `minute`; `label` with `label`; `all`) | intent `DISMISS_ALARM`, extras SEARCH\_MODE (`android.next`, `android.time` with HOUR (0–23) and MINUTES, never IS\_PM; `android.label` with MESSAGE; `android.all`) | "I've asked your Clock to dismiss the 6:30 AM alarm, if it's due in the next 24 hours." |
 | `alarm.snooze` | optional `minutes` (1–60) | intent `SNOOZE_ALARM`, extra SNOOZE\_DURATION when given | "I've asked your Clock to snooze the alarm." |
@@ -73,7 +73,7 @@ Only the `-high` tier matches: the stage has one place in the pipeline, and its 
 It matches only when all of these hold, and otherwise returns no match, so the rest of the pipeline runs as if Waggle weren't installed:
 
 1. **The speaker is a Waggle phone:** the utterance came from a peer that has announced `waggle.capabilities` in a `version` this package supports. Satellites that don't speak Waggle never announce, so they're never matched, and no list of client IDs is kept on the hub.
-2. **The utterance is a request it understands.** Matching is deliberately generous for phones in Waggle's domains (times, alarms, timers): a phrasing the stage misses would go on to the alerts skill and set a timer on the hub, which is the wrong place. A false match costs little, since the phone's rules and ask card still decide.
+2. **The utterance is a request it understands.** Matching is deliberately generous for phones in Waggle's domains (times, alarms, timers): a phrasing the stage misses would go on to the hub's own skills (the alerts skill, where installed) and set a timer on the hub, which is the wrong place. A false match costs little, since the phone's rules and ask card still decide.
 3. **The phone would allow it,** by the WAGGLE.md rule matcher run on the cached capabilities. An intent the phone blocks (by a rule, or `unmatched: block` with no rule) isn't Waggle's to take: the user chose not to allow it on the phone, so the request goes on to the stock skills and is handled on the hub. A query the phone hasn't enabled is treated the same way. An `ask` rule matches; the phone asks.
 
 A match produces a `waggle:request` with `speak: true`. ovos-core emits a match as a reply to the utterance, so it arrives as the match type `waggle:utterance`, whose data is a `waggle:request`'s (`request`, `params`, `speak`) plus the utterance fields. The handler runs it exactly like a `waggle:request` and is registered with `is_intent=True` and `handler_info="mycroft.skill.handler"`, so `ovos.utterance.handled` follows once the outcome has been spoken; it goes to the phone, ending its turn. (ovos-workshop reports `mycroft.skill.handler.complete`, or `.error`, and ovos-core's dispatcher emits the end marker.) Plain `waggle:request`s and the persona's tool calls never emit it, since whoever made the request (the persona, another skill) owns the utterance.
@@ -94,7 +94,7 @@ The other gates take calendar questions (a calendar word with "my", "any", "next
   - Two alarms at the same time, or at the next ring, still open the picker; that's left to the Clock.
   - Another day ("my Monday alarm") isn't taken, nor are smoke, car and other alarms that aren't the Clock's.
 - `SNOOZE_ALARM` (API 23) snoozes every ringing alarm: "snooze", "snooze the alarm", "snooze for 10 minutes". The length goes in SNOOZE\_DURATION, which AOSP's Clock ignores in favour of the alarm's own snooze length (checked on the emulator: 2 asked, 10 given), so the confirmation never repeats it.
-- **On screen only.** Like every Waggle intent, these launch only while Wiggins is on screen; otherwise the phone answers `launch_failed` ("Try again with your phone unlocked"). On a locked phone Wiggins doesn't listen at all (its panel stays behind the keyguard), so "snooze" said to a locked phone with an alarm ringing never reaches the hub; the Clock itself would snooze while locked. Unlocking on invocation is a Wiggins matter.
+- **On screen only.** Like every Waggle intent, these launch only while Wiggins is on screen; otherwise the phone answers `launch_failed` ("Try again with your phone unlocked"). On a locked phone, Wiggins 0.4.0-rc3 asks the user to unlock when invoked and then listens as usual; earlier versions don't listen at all while locked (the panel stays behind the keyguard), so "snooze" never reached the hub. The Clock itself would snooze while locked; unlocking is Wiggins' matter, not Waggle's.
 
 The Clock reports whether anything matched only to a voice interactor, which Waggle isn't, so a phone's `ok` means only that Android accepted the intent, and the confirmations are hedged ("I've asked your Clock to …"); the Clock opening on screen shows the rest. A bare "stop" or "cancel" isn't taken: OVOS's stop stage runs first and matches exactly those words, and passes "stop the timer" on. Phones need rules for the four actions, which Wiggins seeds as run, except `DISMISS_ALARM`, which asks; a phone without them blocks the actions (`unmatched`), so the stage leaves these requests to the hub as before. WAGGLE.md doesn't change: these are ordinary intents with existing extra types.
 
@@ -158,6 +158,16 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 | `package_<request>` | none | Optional package override per request |
 | `capabilities_file` | `~/.local/share/ovos-skill-waggle/capabilities.json` | Where the capability cache is kept (under `$XDG_DATA_HOME` if set); `false` keeps it in memory only |
 
+## Known limits
+
+- **English only:** v1 ships `en-us` locale files and matching only.
+- **What the Clock can't do:** no intent cancels a running timer (Waggle shows the timers instead) or deletes an alarm; dismissing reaches only alarms due within 24 hours; AOSP's Clock ignores a snooze length; alarm labels match case-sensitively, so Waggle asks for an alarm's time instead; two alarms at the same time still open the Clock's picker, which crashes on Android 16.
+- **Results aren't confirmed:** the Clock reports matches only to a voice interactor, so stop, dismiss and snooze outcomes are hedged.
+- **The phone must be in front:** Wiggins launches intents only while it's on screen, and on a locked phone listens only after an unlock (0.4.0-rc3).
+- **The persona's tools** work only in the ovos-core process that runs the Waggle plugin, and depend on ovos-persona running the tool loop on its handler's thread (see "The persona").
+- **Other satellites get nothing from Waggle:** phone requests from them are out of scope, so without the hub's own alerts skill they have no timers or alarms at all.
+- **Reminders and calendar entries** aren't Waggle's (see "Purpose and scope").
+
 ## Testing
 
 - **Library:** unit tests for message validation, the rule matcher (including the specificity and tie-break cases in WAGGLE.md) and every intent builder. The matcher cases are data, in `waggle/testdata/rule_cases.json`, so Wiggins' Kotlin matcher runs the same ones.
@@ -172,11 +182,11 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 
 ## Milestones
 
-1. **S1 — Library:** `waggle` message models, rule matcher, intent builders, fake phone and fake hub. WAGGLE.md frozen as v1. The `waggle:request` and `waggle:request.response` shapes fixed.
-2. **S2 — Actions:** the pipeline stage with capability gating, the capability cache, and the alarm and timer requests with request/response and timeouts. Matches Wiggins M5.
-3. **S3 — Queries:** the contacts, apps and calendar requests with the follow-up question.
-4. **S4 — Persona tools:** the persona hands requests it can't answer back to the phone through tool use, with Waggle's toolbox in ovos-agentic-loop's tool-calling loop (see "The persona"). Also: the capability cache in a file, and text messages that keep their final punctuation. Needs ovos-core 3.x.
-5. **0.7.0 — Stopping timers and alarms:** `timers.stop`, `alarm.dismiss` and `alarm.snooze` from the stage and as tools (see "Stopping timers and alarms"). No WAGGLE.md change; needs a Wiggins release with rules (and package visibility) for the four actions.
+1. **S1 — Library** (0.2.0): `waggle` message models, rule matcher, intent builders, fake phone and fake hub. WAGGLE.md frozen as v1. The `waggle:request` and `waggle:request.response` shapes fixed.
+2. **S2 — Actions** (0.2.0): the pipeline stage with capability gating, the capability cache, and the alarm and timer requests with request/response and timeouts. Matches Wiggins M5.
+3. **S3 — Queries** (0.3.0): the contacts, apps and calendar requests with the follow-up question.
+4. **S4 — Persona tools** (released in 0.5.0; 0.4.0 moved to ovos-core 3 first): the persona hands requests it can't answer back to the phone through tool use, with Waggle's toolbox in ovos-agentic-loop's tool-calling loop (see "The persona"). Also: the capability cache in a file, and text messages that keep their final punctuation. Needs ovos-core 3.x.
+5. **Stopping timers and alarms** (0.7.0): `timers.stop`, `alarm.dismiss` and `alarm.snooze` from the stage and as tools (see "Stopping timers and alarms"). No WAGGLE.md change; needs Wiggins 0.4.0-rc3 or later, which has rules (and package visibility) for the four actions.
 
 Version 0.6.0 was planned as Clock reminders, never released, and abandoned on 2026-10-12, so the next release after 0.5.0 is 0.7.0.
 

@@ -25,18 +25,18 @@ hivemind-core allow-msg waggle.intent.response <id>
 hivemind-core allow-msg waggle.query.response <id>
 ```
 
-The stage only answers phones that have announced Waggle capabilities, so other satellites keep using the hub's own skills. Their capabilities are kept in `~/.local/share/ovos-skill-waggle/capabilities.json`; keep that on a persistent volume so a restart doesn't forget them.
+The stage only answers phones that have announced Waggle capabilities, so other satellites keep using the hub's own skills. Their capabilities are kept in `~/.local/share/ovos-skill-waggle/capabilities.json`; keep that on a persistent volume so a restart doesn't forget them. Stopping timers and dismissing or snoozing alarms need Wiggins 0.4.0-rc3 or later, which has rules for those actions; an older phone blocks them, and the hub's own skills answer instead.
 
 For the persona's tools, make the persona's solver ovos-agentic-loop's `ovos-native-toolcall-loop`, with `"toolboxes": ["ovos-waggle-tools"]` and a tool-capable chat engine as its brain. See SPEC.md "Hub setup" and "The persona (S4)".
 
 ## Develop
 
 ```sh
-uv venv && uv pip install --prerelease=allow -e '.[test]'
+uv venv -p 3.13 --clear && uv pip install --prerelease=allow -e '.[test]'
 .venv/bin/python -m pytest
 ```
 
-The dependencies are OVOS alphas, hence `--prerelease=allow`.
+The dependencies are OVOS alphas, hence `--prerelease=allow`. `--clear` replaces any older environment in `.venv`.
 
 `waggle-fake-hub` sends scripted Waggle requests to a phone through a hub, for testing phone clients.
 

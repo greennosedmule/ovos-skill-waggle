@@ -134,7 +134,8 @@ detail.
   (ringing timers only, no UI) and then `SHOW_TIMERS`, in that order: the
   Clock covers Wiggins, which then refuses launches.
 - **Wiggins launches only while it's on screen** (`launch_failed` otherwise;
-  on a locked phone it doesn't listen, so nothing reaches the hub),
+  on a locked phone 0.4.0-rc3 asks for an unlock first, and earlier versions
+  don't listen at all),
   and needs `<queries>` entries and rules for every action Waggle sends. New
   default rules reach existing installs only through a Wiggins DB migration;
   until then `unmatched: block` makes the stage leave those requests alone.
