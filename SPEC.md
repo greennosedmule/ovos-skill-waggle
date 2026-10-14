@@ -189,7 +189,7 @@ Settings are the plugin's config, in the hub's `mycroft.conf` under `intents` �
 3. **S3 — Queries** (0.3.0): the contacts, apps and calendar requests with the follow-up question.
 4. **S4 — Persona tools** (released in 0.5.0; 0.4.0 moved to ovos-core 3 first): the persona hands requests it can't answer back to the phone through tool use, with Waggle's toolbox in ovos-agentic-loop's tool-calling loop (see "The persona"). Also: the capability cache in a file, and text messages that keep their final punctuation. Needs ovos-core 3.x.
 5. **Stopping timers and alarms** (0.7.0): `timers.stop`, `alarm.dismiss` and `alarm.snooze` from the stage and as tools (see "Stopping timers and alarms"). No WAGGLE.md change; needs Wiggins 0.4.0-rc3 or later, which has rules (and package visibility) for the four actions.
-6. **Watching** (0.8.0): with `user_watching` in an utterance's context, results the phone shows and "Confirm on your phone." aren't spoken (see "Requests"). An optional WAGGLE.md field, so still v1; Wiggins 0.5.1 sends it, and older phones get today's speech. Also: a text's body starts with a capital letter.
+6. **Watching** (0.8.0): with `user_watching` in an utterance's context, results the phone shows and "Confirm on your phone." aren't spoken (see "Requests"). An optional WAGGLE.md field, so still v1; Wiggins 0.5.1 sends it, and older phones get today's speech. Also: a text's body starts with a capital letter. 0.8.1 marks a persona tool's result `on_screen` when the phone shows it, so the hub can leave out the model's reply too (see "The persona").
 
 Version 0.6.0 was planned as Clock reminders, never released, and abandoned on 2026-10-12, so the next release after 0.5.0 is 0.7.0.
 
