@@ -102,9 +102,17 @@ VIRTUAL_ENV=/path/to/venv uv pip install --prerelease=allow -e '.[test]'
   `false` keeps it in memory only. The hub needs a persistent volume there.
   The file is written atomically (temp file and `os.replace`), and only when a
   phone's capabilities change.
-- **Raw utterances.** The bus hands each `recognizer_loop:utterance` listener
-  its own copy before transformers run, but may run listeners concurrently. So
-  a text message's match waits up to `wait_for_said_s` (0.5 s) for the record.
+- **Raw utterances.** ovos-core 3 listens on `ovos.utterance.handle`, not
+  `recognizer_loop:utterance`. The bus client hands Waggle's listener the frame
+  as received and ovos-core a forwarded copy, built before either runs, whose
+  `data` is a shallow copy: the `utterances` list is shared. The normalizer
+  returns a new list rather than editing that one, so the record keeps the
+  phone's text. A transformer that edits it in place (OVOS-TRANSFORM-1 allows
+  it) races the record: ovos-utterance-corrections-plugin does, but only once it
+  has regex or word replacements configured, and the hub configures none. The
+  handlers run concurrently, so a text message's match waits up to
+  `wait_for_said_s` (0.5 s) for the record. `tests/test_said_real_bus.py` runs
+  this on a real `MessageBusClient`.
 - Settings come from `mycroft.conf` under `intents` → `ovos-waggle-pipeline-plugin`.
 
 ## Phone-side facts the code depends on
