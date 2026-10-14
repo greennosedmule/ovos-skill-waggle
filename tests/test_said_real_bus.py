@@ -23,12 +23,13 @@ pytest.importorskip("ovos_core")
 
 from ovos_core.intent_services.service import IntentService  # noqa: E402
 
+from ovos_skill_waggle.capabilities import CAN_ASK  # noqa: E402
 from ovos_skill_waggle.handlers import WATCHING  # noqa: E402
-from ovos_skill_waggle.pipeline import PLUGIN_ID, WagglePipeline  # noqa: E402
+from ovos_skill_waggle.pipeline import PLUGIN_ID, SKILL_ID, WagglePipeline  # noqa: E402
 from ovos_skill_waggle.said import RAW_UTTERANCES  # noqa: E402
-from waggle.intents import EXTRA_SMS_BODY  # noqa: E402
+from waggle.intents import ACTION_SET_TIMER, EXTRA_SMS_BODY  # noqa: E402
 
-from conftest import NOW, PEER, TestPipeline  # noqa: E402
+from conftest import NOW, PEER, TestPipeline, capabilities  # noqa: E402
 from test_end_to_end import PIPELINE  # noqa: E402
 
 MOM = {"fn": "Mom", "tel": [{"value": "+15550001111", "type": "cell"}]}
@@ -168,3 +169,15 @@ def test_answer_from_raw_utterances(bus, recorder, raw_hub, make_phone):
                                       if m.data.get("expect_response")), None))
     bus.emit(raw("Where are you?", question.context["session"]))
     assert wait_for(lambda: sms_bodies(phone)) == ["Where are you?"]
+
+
+def test_stage_steps_aside_when_the_phone_cant_ask(bus, recorder, service, make_phone):
+    """can_ask false reaches the stage through ovos-core, and an "ask" rule then doesn't match."""
+    phone = make_phone(capabilities=capabilities(
+        rules=[{"action": ACTION_SET_TIMER, "mode": "ask"}]))
+    recorder.clear()
+    session = Session(f"session-of-{PEER}", pipeline=PIPELINE).serialize()
+    bus.emit(utterance("set a timer for 10 minutes", session, **{CAN_ASK: False}))
+    wait_for(lambda: recorder.of("ovos.utterance.handled"))
+    assert [e for e in phone.log if "action" in e.request.data] == []
+    assert not [m for m in recorder.speech() if m.context.get("skill_id") == SKILL_ID]

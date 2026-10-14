@@ -1,7 +1,7 @@
 """The WAGGLE.md rule matcher, shared by the phone and the hub's pre-check."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Optional
 
 from waggle.messages import Capabilities, Intent, Mode, Rule
@@ -46,3 +46,22 @@ def decide_for(capabilities: Capabilities, intent: Intent) -> Decision:
 
 def query_enabled(capabilities: Capabilities, name: str) -> bool:
     return name in capabilities.queries
+
+
+def limited(capabilities: Capabilities, *, can_ask: bool = True,
+            actions: bool = True) -> Capabilities:
+    """``capabilities`` as they apply to one utterance (WAGGLE.md "Common rules").
+
+    Without ``actions`` every rule blocks and no query is enabled; without
+    ``can_ask`` an "ask" blocks, since the phone can't ask its user now.
+    """
+    if not actions:
+        return replace(capabilities, unmatched=Mode.BLOCK, queries=frozenset(),
+                       rules=tuple(replace(r, mode=Mode.BLOCK) for r in capabilities.rules))
+    if not can_ask:
+        return replace(capabilities,
+                       unmatched=Mode.BLOCK if capabilities.unmatched is Mode.ASK
+                       else capabilities.unmatched,
+                       rules=tuple(replace(r, mode=Mode.BLOCK) if r.mode is Mode.ASK else r
+                                   for r in capabilities.rules))
+    return capabilities

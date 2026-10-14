@@ -22,7 +22,7 @@ import os
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import tzinfo
 from pathlib import Path
 from typing import Optional, Union
@@ -32,6 +32,7 @@ from ovos_bus_client.message import Message
 from ovos_utils.log import LOG
 
 from waggle.messages import Capabilities, ErrorCode, WaggleError
+from waggle.rules import limited
 
 PEER_SEPARATOR = "::"
 # The cache file's format, in case it changes.
@@ -79,6 +80,24 @@ class Phone:
         except (ZoneInfoNotFoundError, ValueError):
             LOG.warning(f"Waggle: unknown timezone {name!r} from {self.client_id}")
             return None
+
+
+# Context keys a phone may set on an utterance (WAGGLE.md "Common rules"). Only false counts:
+# absent, the phone's announced rules apply as they are.
+CAN_ASK = "can_ask"            # false: it can't ask its user now, so an "ask" rule blocks
+PHONE_ACTIONS = "phone_actions"  # false: it takes no requests now
+
+
+def as_heard(phone: Phone, message: Optional[Message]) -> Phone:
+    """``phone`` with its rules as they apply to ``message``'s utterance: the same object
+    unless the phone said it can't ask, or takes no requests, right now."""
+    context = message.context if message is not None and isinstance(message.context, dict) else {}
+    can_ask = context.get(CAN_ASK) is not False
+    actions = context.get(PHONE_ACTIONS) is not False
+    if can_ask and actions:
+        return phone
+    return replace(phone, capabilities=limited(phone.capabilities, can_ask=can_ask,
+                                               actions=actions))
 
 
 class CapabilityCache:

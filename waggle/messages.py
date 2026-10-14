@@ -35,6 +35,7 @@ class ErrorCode(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     BAD_REQUEST = "bad_request"
     UNSUPPORTED_VERSION = "unsupported_version"
+    CANNOT_ASK = "cannot_ask"
 
 
 class Mode(str, Enum):

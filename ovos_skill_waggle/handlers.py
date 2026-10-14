@@ -36,10 +36,12 @@ from waggle.rules import decide_for
 
 from ovos_skill_waggle import agenda
 from ovos_skill_waggle.actions import (
-    INTENT_BUILDERS, SUPPORTED_REQUESTS, build_intent, precheck_intent, required_query,
-    spoken_number, timers_stop_intents,
+    INTENT_BUILDERS, SUPPORTED_REQUESTS, build_intent, phone_allows, precheck_intent,
+    required_query, spoken_number, timers_stop_intents,
 )
-from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
+from ovos_skill_waggle.capabilities import (
+    PHONE_ACTIONS, CapabilityCache, Phone, as_heard, peer_of,
+)
 from ovos_skill_waggle.parsing import PHONE_TYPE_SYNONYMS, answer_yes, choose
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
@@ -66,6 +68,7 @@ ERROR_DIALOGS = {
     ErrorCode.LAUNCH_FAILED.value: "launch_failed",
     ErrorCode.PERMISSION_DENIED.value: "permission_denied",
     ErrorCode.UNSUPPORTED_VERSION.value: "unsupported_version",
+    ErrorCode.CANNOT_ASK.value: "cannot_ask",
     ErrorCode.BAD_REQUEST.value: "phone_error",
 }
 
@@ -106,6 +109,13 @@ def phone_origin(message: Message, peer: str) -> Message:
     context["source"] = peer
     context["destination"] = hub if isinstance(hub, str) and hub and hub != peer else HUB_DESTINATION
     return Message(message.msg_type, message.data, context)
+
+
+def why_not_now(origin: Message) -> Outcome:
+    """Why a request the phone's rules allow is refused for this utterance."""
+    if (origin.context or {}).get(PHONE_ACTIONS) is False:
+        return Outcome.failure(ErrorCode.BLOCKED.value, "phone_actions_off")
+    return Outcome.failure(ErrorCode.CANNOT_ASK.value, "cannot_ask")
 
 
 def watching(message: Message) -> bool:
@@ -304,6 +314,18 @@ class RequestHandlers:
                 return Outcome.failure(ErrorCode.UNSUPPORTED_VERSION.value, "unsupported_version")
             return Outcome.failure(UNREACHABLE, "not_connected")
 
+        heard = as_heard(phone, origin)
+        try:
+            outcome = self._run_on(request, origin, heard, settings)
+        except _Stop as stop:
+            outcome = stop.outcome
+        if (heard is not phone and outcome.error == ErrorCode.BLOCKED.value
+                and phone_allows(phone.capabilities, request, settings)):
+            return why_not_now(origin)  # its rules allow it, just not now
+        return outcome
+
+    def _run_on(self, request: WaggleRequest, origin: Message, phone: Phone,
+                settings: Settings) -> Outcome:
         self._precheck(request, phone, settings)
         if request.request == ALARM_DISMISS and request.params["mode"] == "all":
             return self._dismiss_all(request, origin, phone, settings)

@@ -28,6 +28,7 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 - **Time:** all timestamps on the wire are ISO 8601 in UTC with a `Z` suffix, e.g. `2026-10-04T21:00:00Z`. All-day dates are plain `YYYY-MM-DD` and carry no timezone. The one exception is Android extras that are wall-clock values by definition (alarm `HOUR` and `MINUTES`). The hub computes those in the phone's timezone, taken from `waggle.capabilities`.
 - **Unknown fields** are ignored by both sides. Unknown message types, query names or extra types get `bad_request`.
 - **Watching:** a phone may set `user_watching: true` in the context of a `recognizer_loop:utterance` when its user is looking at its screen, such as an assistant panel. The hub then doesn't speak the confirmation of a request whose result is on screen (an activity the phone opens: its alarms, an app, the dialer, a drafted text), nor its prompt to confirm an "ask" rule on the phone. Questions, failures and confirmations of background actions are still spoken. A phone that knows the user isn't looking (a hands-free car or headset) sends false. Without the key, or with any value but `true`, the hub speaks as usual. The hub reads the flag from the utterance that triggered the request, not from later answers.
+- **Can't ask, or no requests now:** a phone may set `can_ask: false` in the context of a `recognizer_loop:utterance` when it can't ask its user right now (e.g. locked, hands-free), and `phone_actions: false` when it takes no requests right now. For that utterance the hub treats every `ask` rule as `block` (with `can_ask: false`) or every rule as `block` and no query as enabled (with `phone_actions: false`): it doesn't send what would be refused, so its own skills or other handlers can answer instead. Absent, or any value but `false`, the announced rules apply as they are.
 - **Routing:** the hub sends requests as replies to the message that triggered them (`Message.reply`), so HiveMind delivers them to the right peer. Responses come back as new messages from the phone.
 
 ## Error codes
@@ -42,6 +43,7 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 | `permission_denied` | The phone lacks the Android permission a query needs |
 | `bad_request` | The request is malformed, uses a forbidden URI scheme, or names an unknown query or extra type |
 | `unsupported_version` | The request uses a protocol version the phone doesn't speak |
+| `cannot_ask` | The rule was "ask", but the phone can't ask its user right now (e.g. locked, hands-free) |
 
 ## `waggle.capabilities`
 
@@ -78,6 +80,7 @@ The phone and the hub's pre-check both evaluate rules this way:
 1. A rule has an `action` (required) and optionally a `scheme` (the data URI's scheme), a `package` and a `category`. A rule matches an intent when every field the rule sets equals the intent's value. A rule's `category` matches if it appears in the intent's `categories`. Schemes compare case-insensitively, as in RFC 3986, here and in the forbidden-scheme check.
 2. Of the matching rules, the one with the most fields set wins. On a tie, the stricter mode wins: `block` over `ask` over `run`.
 3. If no rule matches, the phone's `unmatched` mode applies.
+4. A phone that can't ask its user right now answers an intent whose decision is `ask` with `cannot_ask`, and says so with `can_ask: false` in the utterance's context (see "Common rules").
 
 ## `waggle.intent`
 

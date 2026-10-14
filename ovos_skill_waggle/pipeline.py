@@ -56,7 +56,7 @@ from waggle.messages import CAPABILITIES, WaggleError
 
 from ovos_skill_waggle.actions import phone_allows
 from ovos_skill_waggle.apps import AppCatalog
-from ovos_skill_waggle.capabilities import CapabilityCache, Phone, peer_of
+from ovos_skill_waggle.capabilities import CapabilityCache, Phone, as_heard, peer_of
 from ovos_skill_waggle.handlers import RequestHandlers, phone_origin, spoken_clock
 from ovos_skill_waggle.parsing import (
     MISSING_ALARM_TIME, MISSING_BODY, MISSING_DURATION, MISSING_HALF, MISSING_TIME, Parsed,
@@ -242,6 +242,7 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         # A phone known only from the capability file hasn't had its apps fetched yet.
         self.apps.ensure(phone, phone_origin(message, peer_of(message)),
                          wait=not self.fetch_apps_in_background)
+        phone = as_heard(phone, message)  # its rules as they apply to this utterance
         for utterance in utterances:
             parsed = self.parse(utterance, lang, phone)
             if parsed is None:

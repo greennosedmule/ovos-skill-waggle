@@ -31,7 +31,7 @@ hostnames, IPs and private repo names out of code, docs and commit messages. Say
 | `ovos_skill_waggle/requests.py`, `actions.py` | Request shapes and param validation, and what each request needs from the phone (`phone_allows`, the pre-check intents). |
 | `ovos_skill_waggle/tools.py` | `WaggleToolBox` (`opm.agents.toolbox` entry point `ovos-waggle-tools`): one tool per request for ovos-agentic-loop's `ovos-native-toolcall-loop`. |
 | `ovos_skill_waggle/said.py` | Each session's `recognizer_loop:utterance` as the phone sent it, so text messages keep the punctuation ovos-core's normalizer strips. The stage re-parses a `message.compose` match from that wording (`as_said`), and follow-up answers come back through it too. A hub's `raw_utterances` in the message's context (`in_context`) wins over the recording and needs no wait; the recording is the stock-hub fallback. |
-| `ovos_skill_waggle/capabilities.py` | The capability cache, keyed by HiveMind client id and kept in a JSON file. |
+| `ovos_skill_waggle/capabilities.py` | The capability cache, keyed by HiveMind client id and kept in a JSON file. `as_heard` limits a phone's rules to one utterance by its `can_ask` and `phone_actions` flags; the stage, the tool list and the handlers all judge by that. |
 | `ovos_skill_waggle/apps.py`, `agenda.py`, `settings.py` | The app-label catalog used for matching "open X", spoken calendar text, and plugin settings. |
 | `ovos_skill_waggle/locale/en-us/` | Dialogs and `.voc` files, English only. They ship through `package-data` in pyproject.toml. |
 

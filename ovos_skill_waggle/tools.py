@@ -42,7 +42,7 @@ from ovos_utils.log import LOG
 from pydantic import ConfigDict, Field
 
 from ovos_skill_waggle.actions import phone_allows
-from ovos_skill_waggle.capabilities import Phone, peer_of
+from ovos_skill_waggle.capabilities import Phone, as_heard, peer_of
 from ovos_skill_waggle.handlers import ON_SCREEN
 from ovos_skill_waggle.pipeline import WagglePipeline, find_phone
 from ovos_skill_waggle.requests import (
@@ -221,6 +221,7 @@ class WaggleToolBox(ToolBox):
         message, pipeline, phone = _asking_phone()
         if phone is None:
             return []
+        phone = as_heard(phone, message)
         allowed = {TOOLS[request][0] for request, (_, _, _, params) in TOOLS.items()
                    if phone_allows(phone.capabilities, WaggleRequest(request, params),
                                    pipeline.waggle_settings)}
