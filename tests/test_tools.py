@@ -8,7 +8,7 @@ from ovos_skill_waggle.handlers import WATCHING
 from ovos_skill_waggle.requests import REQUEST_RESPONSE
 from ovos_skill_waggle.tools import TOOLBOX_ID, Outcome, WaggleToolBox
 from waggle.fake_phone import AskAnswer
-from waggle.intents import ACTION_DIAL, ACTION_SET_TIMER
+from waggle.intents import ACTION_DIAL, ACTION_SET_TIMER, ACTION_SHOW_ALARMS
 from waggle.messages import APPS_LIST, CALENDAR_NEXT, INTENT
 
 from conftest import NOW, OTHER_PEER, PEER, capabilities, match_message, utterance
@@ -128,6 +128,55 @@ def test_ask_rule_prompt_is_muted_for_a_user_watching(toolbox, recorder, pipelin
         "compose_text_message", {"name": "Sam Lee", "body": "Running late, sorry!"}))
     assert result.ok
     assert recorder.speech() == []
+
+
+CAMERA = {"label": "Camera", "package": "app.grapheneos.camera"}
+
+
+@pytest.mark.parametrize("name,args,on_screen", [
+    ("show_alarms", {}, True),
+    ("open_app", {"name": "camera"}, True),
+    ("call_contact", {"name": "Sam Lee"}, True),
+    ("compose_text_message", {"name": "Sam Lee", "body": "Running late"}, True),
+    ("set_timer", {"seconds": 60}, False),
+    ("set_alarm", {"hour": 7, "minute": 0}, False),
+    ("stop_timers", {}, False),
+    ("snooze_alarm", {}, False),
+    ("dismiss_alarm", {}, False),
+    ("get_calendar_events", {}, False),
+])
+def test_success_says_whether_the_phone_shows_it(toolbox, pipeline, make_phone, name, args,
+                                                 on_screen):
+    make_phone(contacts=[SAM_LEE], apps=[CAMERA])
+    result = as_persona(persona_query(), lambda: toolbox.call_tool(name, args))
+    assert result.ok and result.on_screen is on_screen
+
+
+def test_on_screen_needs_no_watching_user(toolbox, pipeline, make_phone):
+    make_phone()
+    message = persona_query()
+    message.context[WATCHING] = False
+    assert as_persona(message, lambda: toolbox.call_tool("show_alarms", {})).on_screen is True
+
+
+def test_failure_is_never_on_screen(toolbox, pipeline, make_phone):
+    make_phone(capabilities=capabilities(rules=[{"action": ACTION_SHOW_ALARMS, "mode": "block"}]))
+    result = as_persona(persona_query(), lambda: toolbox.call_tool("show_alarms", {}))
+    assert not result.ok and result.on_screen is False
+
+
+def test_not_a_phone_is_never_on_screen(toolbox, pipeline):
+    result = as_persona(persona_query(peer="not-a-phone"),
+                        lambda: toolbox.call_tool("show_alarms", {}))
+    assert not result.ok and result.on_screen is False
+
+
+def test_the_model_reads_no_on_screen(toolbox, pipeline, make_phone):
+    """The hub hands the model str(result); on_screen is only for the hub."""
+    make_phone()
+    result = as_persona(persona_query(), lambda: toolbox.call_tool("show_alarms", {}))
+    assert result.on_screen is True
+    assert str(result) == "ok=True summary='Here are your alarms.' error=None"
 
 
 def test_which_one_is_asked_of_the_phone(toolbox, pipeline, make_phone):

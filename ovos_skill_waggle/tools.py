@@ -25,6 +25,12 @@ stage uses. A satellite that isn't a Waggle phone (or a persona query with no
 message at all) gets none. The handlers check the phone's rules again when a
 tool runs, so the list only keeps the model from trying what the phone
 refuses.
+
+**What the user can see.** A successful request whose result the phone shows
+(its alarms, an app, the dialer, a drafted text) comes back with
+``on_screen`` set, so the hub can leave out the model's reply when the user
+is watching (SPEC.md "Requests"). It isn't in the result's ``str()``, which
+is what the model reads.
 """
 from __future__ import annotations
 
@@ -37,6 +43,7 @@ from pydantic import ConfigDict, Field
 
 from ovos_skill_waggle.actions import phone_allows
 from ovos_skill_waggle.capabilities import Phone, peer_of
+from ovos_skill_waggle.handlers import ON_SCREEN
 from ovos_skill_waggle.pipeline import WagglePipeline, find_phone
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
@@ -117,6 +124,10 @@ class Outcome(ToolOutput):
     error: Optional[str] = Field(None, description="Why not, when ok is false: blocked, "
                                                    "declined, timeout, no_handler, unreachable, "
                                                    "...")
+    # For the hub, not the model: left out of str(), which is what the model reads.
+    on_screen: bool = Field(False, repr=False,
+                            description="Whether the phone shows the result: its alarms, an "
+                                        "app, the dialer or a drafted text.")
 
 
 # Per request: tool name, description, arguments, and params the rule check can judge it by
@@ -235,4 +246,4 @@ class WaggleToolBox(ToolBox):
         LOG.info(f"Waggle: persona tool {request} {params} for {phone.client_id}")
         response: RequestResponse = pipeline.handlers.handle(
             Message(REQUEST, data, dict(message.context or {})))
-        return Outcome(**response.to_dict())
+        return Outcome(**response.to_dict(), on_screen=response.ok and request in ON_SCREEN)
