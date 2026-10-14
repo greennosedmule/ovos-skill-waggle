@@ -7,11 +7,15 @@ import pytest
 from ovos_bus_client.message import Message
 from ovos_bus_client.session import Session
 
-from ovos_skill_waggle.handlers import as_sentence, phone_origin, spoken_clock, spoken_duration
+from ovos_skill_waggle.handlers import (
+    WATCHING, as_sentence, phone_origin, spoken_clock, spoken_duration,
+)
 from ovos_skill_waggle.pipeline import SKILL_ID
 from ovos_skill_waggle.requests import REQUEST, REQUEST_RESPONSE, RequestResponse
 from waggle.fake_phone import AskAnswer
-from waggle.intents import ACTION_SET_ALARM, ACTION_SET_TIMER, ACTION_SHOW_ALARMS
+from waggle.intents import (
+    ACTION_DISMISS_ALARM, ACTION_SET_ALARM, ACTION_SET_TIMER, ACTION_SHOW_ALARMS,
+)
 from waggle.messages import (
     CAPABILITIES, INTENT, INTENT_RESPONSE, ErrorCode, Intent, Response,
 )
@@ -31,6 +35,12 @@ def request(name, params=None, speak=True, peer=PEER, **extra):
     context = {"source": peer, "peer": peer, "destination": "skills"} if peer else {}
     return Message(REQUEST, {"request": name, "params": params or {}, "speak": speak, **extra},
                    context)
+
+
+def watched(message, value=True):
+    """``message`` from a phone whose user is looking at its screen."""
+    message.context[WATCHING] = value
+    return message
 
 
 def run(bus, recorder, message):
@@ -326,6 +336,67 @@ def test_plain_request_never_emits_handled(bus, recorder, phone):
     # Whoever made the request owns the utterance and says when it's handled.
     run(bus, recorder, request(*TIMER, speak=True))
     assert recorder.of(HANDLED) == [] and recorder.of(HANDLER_COMPLETE) == []
+
+
+# --- a user who's watching the phone's screen -------------------------------
+
+def test_watching_mutes_a_success_on_screen(bus, recorder, phone):
+    response = run(bus, recorder, watched(request("alarms.show")))
+    assert response == RequestResponse.success("Here are your alarms.")  # summary for the caller
+    assert spoken(recorder) == []
+
+
+@pytest.mark.parametrize("value", [False, "true", 1, None])
+def test_watching_must_be_true(bus, recorder, phone, value):
+    run(bus, recorder, watched(request("alarms.show"), value))
+    assert spoken(recorder) == ["Here are your alarms."]
+
+
+@pytest.mark.parametrize("name,params,said", [
+    ("timer.set", {"seconds": 600}, "Timer set for 10 minutes."),
+    ("alarm.set", {"hour": 6, "minute": 30}, "Alarm set for 6:30 AM."),
+])
+def test_watching_keeps_a_background_success(bus, recorder, phone, name, params, said):
+    run(bus, recorder, watched(request(name, params)))
+    assert spoken(recorder) == [said]
+
+
+def test_watching_keeps_failures(bus, recorder, pipeline, make_phone):
+    make_phone(capabilities=capabilities(rules=[{"action": ACTION_SHOW_ALARMS, "mode": "block"}]))
+    response = run(bus, recorder, watched(request("alarms.show")))
+    assert response.error == "blocked"
+    assert spoken(recorder) == [response.summary]
+
+
+def test_watching_mutes_confirm_on_phone(bus, recorder, pipeline, make_phone):
+    make_phone(capabilities=ask_rules(ACTION_SHOW_ALARMS))
+    assert run(bus, recorder, watched(request("alarms.show"))).ok
+    assert spoken(recorder) == []
+
+
+def test_watching_mutes_confirm_on_phone_but_not_a_background_success(bus, recorder, pipeline,
+                                                                        make_phone):
+    make_phone(capabilities=ask_rules())
+    run(bus, recorder, watched(request(*TIMER)))
+    assert spoken(recorder) == ["Timer set for 10 minutes."]
+
+
+def test_watching_keeps_the_dismiss_all_warning(bus, recorder, pipeline, make_phone):
+    make_phone(capabilities=ask_rules(ACTION_DISMISS_ALARM))
+    run(bus, recorder, watched(request("alarm.dismiss", {"mode": "all"})))
+    assert spoken(recorder)[0] == ("That dismisses every alarm due in the next 24 hours. "
+                                   "Confirm on your phone.")
+
+
+def test_watching_pipeline_request_still_emits_handled(bus, recorder, pipeline, make_phone):
+    make_phone()
+    utt = watched(utterance("show my alarms"))
+    m = pipeline.match_high(utt.data["utterances"], "en-US", utt)
+    recorder.clear()
+    bus.emit(match_message(utt, m))
+    assert recorder.of(REQUEST_RESPONSE)[0].data["ok"] is True
+    assert spoken(recorder) == []
+    assert recorder.types().count(HANDLER_COMPLETE) == 1
 
 
 @pytest.mark.parametrize("phone_setup", [{}, {"silent": True}, {"launch": ErrorCode.NO_HANDLER}])

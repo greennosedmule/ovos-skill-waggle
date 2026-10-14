@@ -23,6 +23,7 @@ pytest.importorskip("ovos_core")
 
 from ovos_core.intent_services.service import IntentService  # noqa: E402
 
+from ovos_skill_waggle.handlers import WATCHING  # noqa: E402
 from ovos_skill_waggle.pipeline import PLUGIN_ID, WagglePipeline  # noqa: E402
 from waggle.intents import EXTRA_SMS_BODY  # noqa: E402
 
@@ -86,10 +87,10 @@ def sms_bodies(phone):
             if EXTRA_SMS_BODY in (e.request.data.get("extras") or {})]
 
 
-def utterance(text, session):
+def utterance(text, session, **context):
     return Message("recognizer_loop:utterance", {"utterances": [text], "lang": "en-US"},
                    {"source": PEER, "peer": PEER, "destination": "skills",
-                    "session": session})
+                    "session": session, **context})
 
 
 @pytest.mark.parametrize("text,body", [
@@ -112,3 +113,14 @@ def test_answer_keeps_its_punctuation(bus, recorder, service, make_phone):
     assert question.data["utterance"] == "What should the message say?"
     bus.emit(utterance("Where are you?", question.context["session"]))
     assert wait_for(lambda: sms_bodies(phone)) == ["Where are you?"]
+
+
+def test_watching_flag_reaches_the_handler_through_ovos_core(bus, recorder, service, make_phone):
+    """A context key the phone sets survives ovos-core's forward and match messages."""
+    phone = make_phone(contacts=[MOM])
+    recorder.clear()
+    session = Session(f"session-of-{PEER}", pipeline=PIPELINE).serialize()
+    bus.emit(utterance("Text Mom are you coming?", session, **{WATCHING: True}))
+    assert wait_for(lambda: sms_bodies(phone)) == ["Are you coming?"]
+    wait_for(lambda: recorder.of("ovos.utterance.handled"))
+    assert recorder.speech() == []

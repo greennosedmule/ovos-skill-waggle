@@ -51,6 +51,12 @@ from ovos_skill_waggle.settings import Settings
 # The context value hivemind-core gives client messages that name no destination.
 HUB_DESTINATION = "skills"
 
+# Context key a phone sets on an utterance when its user is looking at its screen
+# (WAGGLE.md "Common rules").
+WATCHING = "user_watching"
+# Requests whose result the phone shows: not confirmed aloud to a user who's watching.
+ON_SCREEN = frozenset({ALARMS_SHOW, APP_OPEN, CONTACT_CALL, MESSAGE_COMPOSE})
+
 # Phone error code -> dialog. Codes a newer phone adds fall back to "phone_error".
 ERROR_DIALOGS = {
     ErrorCode.DECLINED.value: "declined",
@@ -100,6 +106,11 @@ def phone_origin(message: Message, peer: str) -> Message:
     context["source"] = peer
     context["destination"] = hub if isinstance(hub, str) and hub and hub != peer else HUB_DESTINATION
     return Message(message.msg_type, message.data, context)
+
+
+def watching(message: Message) -> bool:
+    """Whether the phone said its user is looking at its screen."""
+    return isinstance(message.context, dict) and message.context.get(WATCHING) is True
 
 
 # --- spoken forms ------------------------------------------------------------
@@ -274,6 +285,8 @@ class RequestHandlers:
             except Exception as e:  # a bug here must still answer the caller
                 LOG.exception(f"Waggle: {request.request} failed: {e}")
                 outcome = Outcome.failure(ErrorCode.BAD_REQUEST.value, "error")
+            if outcome.error is None and request.request in ON_SCREEN and watching(origin):
+                speak = False  # the user sees it happen
         return self._report(message, origin, outcome, speak)
 
     # --- the flow ------------------------------------------------------------
@@ -324,7 +337,9 @@ class RequestHandlers:
         if not decision.allowed:
             return Outcome.failure(ErrorCode.BLOCKED.value, "blocked")
         timeout_s = self._timeout(decision.mode, phone, settings)
-        if decision.mode is Mode.ASK:
+        # A user who's watching sees the phone ask; a warning is still said.
+        quiet = confirm_dialog == "confirm_on_phone" and watching(origin)
+        if decision.mode is Mode.ASK and not quiet:
             # Said even when the caller speaks the outcome itself (the persona): the user
             # has to act now, and the outcome only comes once they have.
             self._say(origin, confirm_dialog, {})

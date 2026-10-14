@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 from ovos_bus_client.message import Message
 
+from ovos_skill_waggle.handlers import WATCHING
 from ovos_skill_waggle.requests import REQUEST, REQUEST_RESPONSE, RequestResponse
 from waggle.fake_phone import AskAnswer
 from waggle.intents import ACTION_DIAL, ACTION_MAIN, ACTION_SENDTO, EXTRA_SMS_BODY
@@ -62,14 +63,16 @@ def full_phone(pipeline, make_phone):
     return make_phone(contacts=CONTACTS, apps=APPS, events=EVENTS, now=NOW)
 
 
-def request(name, params, speak=True):
-    return Message(REQUEST, {"request": name, "params": params, "speak": speak},
-                   {"source": PEER, "peer": PEER, "destination": "skills"})
+def request(name, params, speak=True, watching=False):
+    context = {"source": PEER, "peer": PEER, "destination": "skills"}
+    if watching:
+        context[WATCHING] = True
+    return Message(REQUEST, {"request": name, "params": params, "speak": speak}, context)
 
 
-def run(bus, recorder, name, params, speak=True):
+def run(bus, recorder, name, params, speak=True, watching=False):
     recorder.clear()
-    bus.emit(request(name, params, speak))
+    bus.emit(request(name, params, speak, watching))
     responses = recorder.of(REQUEST_RESPONSE)
     assert len(responses) == 1
     return RequestResponse.from_dict(responses[0].data)
@@ -321,6 +324,31 @@ def test_compose(bus, recorder, full_phone, script):
 def test_compose_capitalizes_the_body(bus, recorder, full_phone):
     run(bus, recorder, "message.compose", {"name": "mom", "body": "are you coming? Sam is"})
     assert sent(recorder)[0]["extras"][EXTRA_SMS_BODY]["value"] == "Are you coming? Sam is"
+
+
+@pytest.mark.parametrize("name,params", [
+    ("message.compose", {"name": "mom", "body": "hi"}),
+    ("contact.call", {"name": "sam lee"}),
+    ("app.open", {"name": "camera"}),
+])
+def test_watching_mutes_what_the_phone_shows(bus, recorder, full_phone, script, name, params):
+    response = run(bus, recorder, name, params, watching=True)
+    assert response.ok and response.summary
+    assert recorder.of("speak") == []  # neither "Confirm on your phone." nor the outcome
+
+
+def test_watching_keeps_questions(bus, recorder, full_phone, script):
+    s = script("Sam Lee")
+    run(bus, recorder, "contact.call", {"name": "sam"}, watching=True)
+    assert s.dialogs == ["which_contact"]
+    assert sent(recorder)[0]["data"] == "tel:+15550003333"
+
+
+def test_watching_keeps_not_found(bus, recorder, full_phone):
+    response = run(bus, recorder, "message.compose", {"name": "nobody here", "body": "hi"},
+                   watching=True)
+    assert not response.ok
+    assert [m.data["utterance"] for m in recorder.of("speak")] == [response.summary]
 
 
 def test_compose_asks_without_a_cell(bus, recorder, pipeline, make_phone, script):

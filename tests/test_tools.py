@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from ovos_plugin_manager.persona import find_toolbox_plugins
+from ovos_skill_waggle.handlers import WATCHING
 from ovos_skill_waggle.requests import REQUEST_RESPONSE
 from ovos_skill_waggle.tools import TOOLBOX_ID, Outcome, WaggleToolBox
 from waggle.fake_phone import AskAnswer
@@ -116,6 +117,17 @@ def test_ask_rule_prompts_on_the_phone(toolbox, recorder, pipeline, make_phone):
     sent = [e.request.data for e in phone.log if "action" in e.request.data][0]
     assert sent["extras"]["sms_body"]["value"] == "Running late, sorry!"
     assert [m.data["utterance"] for m in recorder.speech()] == ["Confirm on your phone."]
+
+
+def test_ask_rule_prompt_is_muted_for_a_user_watching(toolbox, recorder, pipeline, make_phone):
+    make_phone(contacts=[SAM_LEE], ask_answer=AskAnswer.ACCEPT)
+    message = persona_query()
+    message.context[WATCHING] = True
+    recorder.clear()
+    result = as_persona(message, lambda: toolbox.call_tool(
+        "compose_text_message", {"name": "Sam Lee", "body": "Running late, sorry!"}))
+    assert result.ok
+    assert recorder.speech() == []
 
 
 def test_which_one_is_asked_of_the_phone(toolbox, pipeline, make_phone):
