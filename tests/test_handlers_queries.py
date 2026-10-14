@@ -318,6 +318,11 @@ def test_compose(bus, recorder, full_phone, script):
     assert intent["extras"][EXTRA_SMS_BODY] == {"type": "string", "value": "I'm late!"}
 
 
+def test_compose_capitalizes_the_body(bus, recorder, full_phone):
+    run(bus, recorder, "message.compose", {"name": "mom", "body": "are you coming? Sam is"})
+    assert sent(recorder)[0]["extras"][EXTRA_SMS_BODY]["value"] == "Are you coming? Sam is"
+
+
 def test_compose_asks_without_a_cell(bus, recorder, pipeline, make_phone, script):
     s = script("work")
     make_phone(contacts=[{"fn": "Lou", "tel": [{"value": "+15551", "type": "home"},

@@ -125,6 +125,19 @@ def as_name(said: str) -> str:
     return said if said != said.lower() else said.title()
 
 
+def as_sentence(body: str) -> str:
+    """A message body starting with a capital: "are you coming?" -> "Are you coming?".
+
+    Only its first letter changes, and only when the first word is all lowercase, so
+    "iPhone's broken" and anything after the first word stay as they are.
+    """
+    first = body.split(maxsplit=1)[0] if body.strip() else ""
+    if not first[:1].islower() or first != first.lower():
+        return body
+    at = body.index(first)
+    return body[:at] + first[0].upper() + body[at + 1:]
+
+
 def spoken_choices(options: list[str]) -> str:
     """ "A or B", "A, B or C"."""
     if len(options) <= 1:
@@ -504,7 +517,7 @@ class RequestHandlers:
                          settings: Settings) -> Outcome:
         who, number = self._number(request, origin, phone, settings, prefer="cell",
                                    texting=True)
-        intent = intents.compose_sms(number, request.params["body"], name=who,
+        intent = intents.compose_sms(number, as_sentence(request.params["body"]), name=who,
                                      package=settings.package(MESSAGE_COMPOSE))
         return self._launch(origin, request, phone, settings, intent,
                             Outcome("message_ready", {"name": who}))

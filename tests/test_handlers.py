@@ -7,7 +7,7 @@ import pytest
 from ovos_bus_client.message import Message
 from ovos_bus_client.session import Session
 
-from ovos_skill_waggle.handlers import phone_origin, spoken_clock, spoken_duration
+from ovos_skill_waggle.handlers import as_sentence, phone_origin, spoken_clock, spoken_duration
 from ovos_skill_waggle.pipeline import SKILL_ID
 from ovos_skill_waggle.requests import REQUEST, REQUEST_RESPONSE, RequestResponse
 from waggle.fake_phone import AskAnswer
@@ -373,6 +373,21 @@ def test_spoken_clock(hour, minute, text):
 ])
 def test_spoken_duration(seconds, text):
     assert spoken_duration(seconds) == text
+
+
+@pytest.mark.parametrize("body,text", [
+    ("are you coming?", "Are you coming?"),
+    ("i'm late, ask Sam to wait", "I'm late, ask Sam to wait"),
+    ("  ok see you there", "  Ok see you there"),
+    ("Running late", "Running late"),
+    ("iPhone's broken, call me", "iPhone's broken, call me"),
+    ("eBay order came", "eBay order came"),
+    ("5 minutes away", "5 minutes away"),
+    ('"no" is the answer', '"no" is the answer'),
+    ("é bien", "É bien"),
+])
+def test_as_sentence_capitalizes_only_the_first_letter(body, text):
+    assert as_sentence(body) == text
 
 
 def test_response_parses_as_waggle_response(bus, recorder, phone):

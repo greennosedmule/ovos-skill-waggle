@@ -94,7 +94,8 @@ def utterance(text, session):
 
 @pytest.mark.parametrize("text,body", [
     ("text Mom saying I'm running late, start without me!", "I'm running late, start without me!"),
-    ("Text Mom saying are you coming?", "are you coming?"),
+    ("Text Mom saying are you coming?", "Are you coming?"),
+    ("Text Mom are you coming?", "Are you coming?"),
 ])
 def test_inline_body_keeps_its_punctuation(bus, service, make_phone, text, body):
     phone = make_phone(contacts=[MOM])
