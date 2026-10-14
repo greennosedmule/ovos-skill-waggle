@@ -64,7 +64,7 @@ from ovos_skill_waggle.parsing import (
     parse_utterance,
 )
 from ovos_skill_waggle.requests import MESSAGE_COMPOSE, REQUEST, WaggleRequest
-from ovos_skill_waggle.said import SaidUtterances
+from ovos_skill_waggle.said import SaidUtterances, in_context
 from ovos_skill_waggle.settings import Settings
 
 PLUGIN_ID = "ovos-waggle-pipeline-plugin"
@@ -277,8 +277,12 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         return None
 
     def as_said(self, message: Message, heard: str, utterances: Optional[List[str]]) -> str:
-        """``heard`` as the phone sent it: from the recorded utterance, else from the original
-        wording ovos-core's normalizer passes on (without its final punctuation), else as is."""
+        """``heard`` as the phone sent it: from the hub's ``raw_utterances`` in ``message``'s
+        context, else from the recorded utterance, else from the original wording
+        ovos-core's normalizer passes on (without its final punctuation), else as is."""
+        raw = in_context(message, heard)
+        if raw is not None:
+            return raw  # no recording to wait for
         session_id = SessionManager.get(message).session_id
         return (self.said.as_said(session_id, heard, self.wait_for_said_s)
                 or original_wording(heard, utterances))
@@ -330,12 +334,15 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         to_phone.context["session"] = session.serialize()
         session_id = session.session_id
         heard: list = []
+        answered: list = []
 
         def on_answer(message: Message) -> None:
             # get_response returns only the first utterance, which ovos-core's normalizer
-            # rewrote; keep them all, in case the answer as said wasn't recorded.
+            # rewrote; keep them all, in case the answer as said wasn't recorded, and the
+            # message, whose context may hold the answer as said.
             if SessionManager.get(message).session_id == session_id:
                 heard[:] = message.data.get("utterances") or []
+                answered[:] = [message]
 
         event = f"{self.skill_id}.converse.get_response"
         self.bus.on(event, on_answer)
@@ -344,7 +351,9 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
                                        wait=False)
         finally:
             self.bus.remove(event, on_answer)
-        return None if answer is None else self.as_said(to_phone, answer, heard)
+        if answer is None:
+            return None
+        return self.as_said(answered[0] if answered else to_phone, answer, heard)
 
     def _render(self, dialog: str, data: dict) -> str:
         return self.dialog_renderer.render(dialog, data)

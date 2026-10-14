@@ -30,7 +30,7 @@ hostnames, IPs and private repo names out of code, docs and commit messages. Say
 | `ovos_skill_waggle/handlers.py` | `RequestHandlers` run a `waggle:request`: re-check the phone's rules, run lookups, send the intent, wait, and report through `waggle:request.response`. They never see an utterance. |
 | `ovos_skill_waggle/requests.py`, `actions.py` | Request shapes and param validation, and what each request needs from the phone (`phone_allows`, the pre-check intents). |
 | `ovos_skill_waggle/tools.py` | `WaggleToolBox` (`opm.agents.toolbox` entry point `ovos-waggle-tools`): one tool per request for ovos-agentic-loop's `ovos-native-toolcall-loop`. |
-| `ovos_skill_waggle/said.py` | Each session's `recognizer_loop:utterance` as the phone sent it, so text messages keep the punctuation ovos-core's normalizer strips. The stage re-parses a `message.compose` match from that wording (`as_said`), and follow-up answers come back through it too. |
+| `ovos_skill_waggle/said.py` | Each session's `recognizer_loop:utterance` as the phone sent it, so text messages keep the punctuation ovos-core's normalizer strips. The stage re-parses a `message.compose` match from that wording (`as_said`), and follow-up answers come back through it too. A hub's `raw_utterances` in the message's context (`in_context`) wins over the recording and needs no wait; the recording is the stock-hub fallback. |
 | `ovos_skill_waggle/capabilities.py` | The capability cache, keyed by HiveMind client id and kept in a JSON file. |
 | `ovos_skill_waggle/apps.py`, `agenda.py`, `settings.py` | The app-label catalog used for matching "open X", spoken calendar text, and plugin settings. |
 | `ovos_skill_waggle/locale/en-us/` | Dialogs and `.voc` files, English only. They ship through `package-data` in pyproject.toml. |
@@ -112,7 +112,9 @@ VIRTUAL_ENV=/path/to/venv uv pip install --prerelease=allow -e '.[test]'
   has regex or word replacements configured, and the hub configures none. The
   handlers run concurrently, so a text message's match waits up to
   `wait_for_said_s` (0.5 s) for the record. `tests/test_said_real_bus.py` runs
-  this on a real `MessageBusClient`.
+  this on a real `MessageBusClient`. A hub that puts `raw_utterances` in the
+  utterance's context makes all of this moot: Waggle reads it from the message
+  it's handling, with no record and no wait.
 - Settings come from `mycroft.conf` under `intents` → `ovos-waggle-pipeline-plugin`.
 
 ## Phone-side facts the code depends on

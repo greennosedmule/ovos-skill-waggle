@@ -11,6 +11,11 @@ utterance came from.
 
 The bus may run this listener and ovos-core's at the same time, so a lookup
 can wait briefly for the utterance to be recorded.
+
+A hub can avoid that race by keeping the phone's own wording in each
+utterance's context, as ``raw_utterances``, before any transformer runs.
+:func:`in_context` reads it from the message being handled, so nothing has to
+be recorded or waited for; the store is for a stock hub that doesn't.
 """
 from __future__ import annotations
 
@@ -30,6 +35,8 @@ MAX_SESSIONS = 256
 PER_SESSION = 4
 # How alike a transformed utterance and the one as said must read (see parsing.original_wording).
 MIN_RATIO = 0.8
+# Context key under which a hub keeps an utterance's wording as the client sent it.
+RAW_UTTERANCES = "raw_utterances"
 
 
 def _loose(text: str) -> str:
@@ -40,6 +47,16 @@ def reads_as(heard: str, said: str) -> bool:
     """Whether ``said`` is ``heard`` before normalizing: nearly the same letters and digits."""
     loose = [_loose(heard), _loose(said)]
     return bool(loose[1]) and SequenceMatcher(None, *loose).ratio() >= MIN_RATIO
+
+
+def in_context(message: Message, heard: str) -> Optional[str]:
+    """The utterance ``heard`` was transformed from, from ``message``'s ``raw_utterances``,
+    or None (not there, not a list of strings, or none reads like ``heard``)."""
+    context = message.context if isinstance(message.context, dict) else {}
+    raw = context.get(RAW_UTTERANCES)
+    if not isinstance(raw, list) or not all(isinstance(u, str) for u in raw):
+        return None
+    return next((said for said in raw if said.strip() and reads_as(heard, said)), None)
 
 
 class SaidUtterances:

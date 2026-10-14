@@ -8,7 +8,7 @@ import pytest
 from ovos_bus_client.message import Message
 from ovos_bus_client.session import Session
 
-from ovos_skill_waggle.said import SaidUtterances, reads_as
+from ovos_skill_waggle.said import RAW_UTTERANCES, SaidUtterances, in_context, reads_as
 from waggle.intents import EXTRA_SMS_BODY
 
 from conftest import PEER
@@ -99,3 +99,56 @@ def test_handler_sends_the_body_as_said(bus, recorder, pipeline, make_phone):
     bus.emit(reply)
     intents = [e.request.data for e in phone.log if "action" in e.request.data]
     assert intents[0]["extras"][EXTRA_SMS_BODY]["value"] == "I'm late, sorry!"
+
+
+# --- the hub's raw_utterances ----------------------------------------------------
+
+def with_raw(message, raw):
+    message.context[RAW_UTTERANCES] = raw
+    return message
+
+
+@pytest.mark.parametrize("raw,found", [
+    (["Text Mom saying I'm late, sorry!"], "Text Mom saying I'm late, sorry!"),
+    (["set a timer", "Text Mom saying I'm late, sorry!"], "Text Mom saying I'm late, sorry!"),
+    (["what is the weather"], None),
+    ("Text Mom saying I'm late, sorry!", None),  # not a list
+    (["Text Mom saying I'm late, sorry!", 3], None),  # not all strings
+    ([], None),
+    (None, None),
+])
+def test_in_context(raw, found):
+    assert in_context(with_raw(said("x"), raw), "text mom saying i am late , sorry") == found
+
+
+def test_in_context_without_the_key():
+    assert in_context(said("x"), "text mom saying i am late , sorry") is None
+
+
+def test_stage_takes_the_body_from_raw_utterances_without_waiting(bus, pipeline, make_phone):
+    """Nothing recorded and a long wait allowed: the context's copy is used at once."""
+    make_phone(contacts=[MOM])
+    pipeline.wait_for_said_s = 5.0
+    utt = with_raw(said("Text Mom saying I'm late, sorry"), ["Text Mom saying I'm late, sorry!"])
+    start = time.monotonic()
+    match = pipeline.match_high(["text mom saying i am late , sorry",
+                                 "Text Mom saying I'm late, sorry"], "en-US", utt)
+    assert time.monotonic() - start < 1.0
+    assert match.match_data["params"] == {"name": "mom", "body": "I'm late, sorry!"}
+
+
+def test_raw_utterances_win_over_the_recorded_utterance(bus, pipeline, make_phone):
+    make_phone(contacts=[MOM])
+    bus.emit(said("Text Mom saying I'm late, sorry."))
+    utt = with_raw(said("x"), ["Text Mom saying I'm late, sorry!"])
+    match = pipeline.match_high(["text mom saying i am late , sorry"], "en-US", utt)
+    assert match.match_data["params"]["body"] == "I'm late, sorry!"
+
+
+def test_stage_falls_back_to_the_recording_when_raw_utterances_dont_match(bus, pipeline,
+                                                                         make_phone):
+    make_phone(contacts=[MOM])
+    bus.emit(said("Text Mom saying I'm late, sorry!"))
+    utt = with_raw(said("x"), ["something else entirely"])
+    match = pipeline.match_high(["text mom saying i am late , sorry"], "en-US", utt)
+    assert match.match_data["params"]["body"] == "I'm late, sorry!"

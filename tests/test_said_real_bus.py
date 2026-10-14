@@ -25,6 +25,7 @@ from ovos_core.intent_services.service import IntentService  # noqa: E402
 
 from ovos_skill_waggle.handlers import WATCHING  # noqa: E402
 from ovos_skill_waggle.pipeline import PLUGIN_ID, WagglePipeline  # noqa: E402
+from ovos_skill_waggle.said import RAW_UTTERANCES  # noqa: E402
 from waggle.intents import EXTRA_SMS_BODY  # noqa: E402
 
 from conftest import NOW, PEER, TestPipeline  # noqa: E402
@@ -124,3 +125,46 @@ def test_watching_flag_reaches_the_handler_through_ovos_core(bus, recorder, serv
     assert wait_for(lambda: sms_bodies(phone)) == ["Are you coming?"]
     wait_for(lambda: recorder.of("ovos.utterance.handled"))
     assert recorder.speech() == []
+
+
+# --- a hub that keeps raw_utterances in the context --------------------------------
+
+class NoRecording:
+    """Stands in for the recorded utterances, to show they aren't needed."""
+
+    def record(self, message):
+        pass
+
+    def as_said(self, *args, **kwargs):
+        raise AssertionError("the recording was consulted")
+
+
+@pytest.fixture
+def raw_hub(service):
+    plugin = service.pipeline_plugins[PLUGIN_ID]
+    plugin.said = NoRecording()
+    return plugin
+
+
+def raw(text, session):
+    return utterance(text, session, **{RAW_UTTERANCES: [text]})
+
+
+@pytest.mark.parametrize("text,body", [
+    ("text Mom saying I'm running late, start without me!", "I'm running late, start without me!"),
+    ("Text Mom are you coming?", "Are you coming?"),
+])
+def test_inline_body_from_raw_utterances(bus, raw_hub, make_phone, text, body):
+    phone = make_phone(contacts=[MOM])
+    bus.emit(raw(text, Session(f"session-of-{PEER}", pipeline=PIPELINE).serialize()))
+    assert wait_for(lambda: sms_bodies(phone)) == [body]
+
+
+def test_answer_from_raw_utterances(bus, recorder, raw_hub, make_phone):
+    phone = make_phone(contacts=[MOM], ask_answer="accept")
+    recorder.clear()
+    bus.emit(raw("text mom", Session(f"session-of-{PEER}", pipeline=PIPELINE).serialize()))
+    question = wait_for(lambda: next((m for m in recorder.speech()
+                                      if m.data.get("expect_response")), None))
+    bus.emit(raw("Where are you?", question.context["session"]))
+    assert wait_for(lambda: sms_bodies(phone)) == ["Where are you?"]
