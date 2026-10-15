@@ -106,8 +106,9 @@ def test_message(text, params, missing):
 
 
 @pytest.mark.parametrize("text", ["read my messages", "any new messages", "what did mom text me"])
-def test_not_a_message(text):
-    assert parsed(text) is None
+def test_reading_messages_isnt_writing_one(text):
+    # These read the phone's notifications (0.11.0); they never compose a text.
+    assert parsed(text)[0] == "notifications.get"
 
 
 # --- apps --------------------------------------------------------------------

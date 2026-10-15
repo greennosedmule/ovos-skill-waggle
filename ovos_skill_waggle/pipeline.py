@@ -27,6 +27,13 @@ matches with ``missing`` set in its data. Its handler asks for the rest with
 ``get_response`` (the converse stage hands the answer back), reads the answer
 here, since only the stage parses language, and then runs the request.
 
+Questions whose answer is better put by the persona, notifications ("what
+did Mom say?") and the phone's location ("where am I?"), are left to it when
+Waggle's toolbox is loaded in this process (the persona can then read them
+with its tools), unless the ``prefer_persona`` setting is false. Without the
+persona the stage takes them itself; notifications the phone reads only aloud
+always go to the stage, which has the phone read them.
+
 A text message keeps the words as the phone sent them, punctuation included:
 :class:`~ovos_skill_waggle.said.SaidUtterances` records each session's
 ``recognizer_loop:utterance`` before ovos-core's transformers rewrite it.
@@ -54,7 +61,7 @@ from ovos_workshop.app import OVOSAbstractApplication
 
 from waggle.messages import CAPABILITIES, WaggleError
 
-from ovos_skill_waggle.actions import phone_allows
+from ovos_skill_waggle.actions import can_list, phone_allows
 from ovos_skill_waggle.apps import AppCatalog
 from ovos_skill_waggle.capabilities import CapabilityCache, Phone, as_heard, peer_of
 from ovos_skill_waggle.handlers import RequestHandlers, phone_origin, spoken_clock
@@ -63,7 +70,9 @@ from ovos_skill_waggle.parsing import (
     answer_alarm_time, answer_dismiss_time, answer_duration, answer_half, original_wording,
     parse_utterance,
 )
-from ovos_skill_waggle.requests import MESSAGE_COMPOSE, REQUEST, WaggleRequest
+from ovos_skill_waggle.requests import (
+    LOCATION_GET, MESSAGE_COMPOSE, NOTIFICATION_REPLY, NOTIFICATIONS_GET, REQUEST, WaggleRequest,
+)
 from ovos_skill_waggle.said import SaidUtterances, in_context
 from ovos_skill_waggle.settings import Settings
 
@@ -84,6 +93,19 @@ PLACEHOLDERS = {MISSING_DURATION: {"seconds": 60}, MISSING_TIME: {"hour": 7, "mi
 # The plugins running in this process, for the persona's tools, which ovos-persona
 # loads without a bus or any other way to reach the plugin.
 _running: "weakref.WeakSet[WagglePipeline]" = weakref.WeakSet()
+# Waggle's persona toolboxes loaded in this process (ovos-persona keeps the ones it uses).
+_toolboxes: "weakref.WeakSet" = weakref.WeakSet()
+# Requests whose matched utterance names a person, for the wording as said.
+_TO_SOMEONE = {MESSAGE_COMPOSE: "name", NOTIFICATION_REPLY: "to"}
+
+
+def register_toolbox(toolbox) -> None:
+    """Note that a persona in this process can use Waggle's tools."""
+    _toolboxes.add(toolbox)
+
+
+def persona_has_tools() -> bool:
+    return len(_toolboxes) > 0
 
 
 def find_phone(peer: Optional[str]) -> Tuple[Optional["WagglePipeline"], Optional[Phone]]:
@@ -120,7 +142,8 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
         self.handlers = RequestHandlers(self.bus, self.capabilities,
                                         lambda: self.waggle_settings,
                                         self._render, self._speak, ask=self._ask,
-                                        clock=lambda: self.clock())
+                                        clock=lambda: self.clock(), home=self.home,
+                                        imperial=self.imperial)
         self.add_event(CAPABILITIES, self.handle_capabilities, speak_errors=False)
         self.add_event(PHONE_UTTERANCE, self.said.record, speak_errors=False)
         self.add_event(REQUEST, self.handle_request, speak_errors=False)
@@ -247,16 +270,20 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
             parsed = self.parse(utterance, lang, phone)
             if parsed is None:
                 continue
-            if parsed.request == MESSAGE_COMPOSE:
+            if parsed.request in _TO_SOMEONE:
                 # The message as said, not as ovos-core's normalizer rewrote it.
                 wording = self.as_said(message, utterance, utterances)
                 said = self.parse(wording, lang, phone)
-                if (said is not None and said.request == MESSAGE_COMPOSE
-                        and said.params.get("name") == parsed.params.get("name")):
+                key = _TO_SOMEONE[parsed.request]
+                if (said is not None and said.request == parsed.request
+                        and said.params.get(key) == parsed.params.get(key)):
                     parsed, utterance = said, wording
             if parsed.check_app and not self.apps.has_app(phone.client_id, parsed.params["name"]):
                 continue  # "open the garage door": not an app on this phone
             if not self.would_allow(phone, parsed):
+                continue
+            if self.leave_to_persona(phone, parsed):
+                LOG.info(f"Waggle: leaving {utterance!r} ({parsed.request}) to the persona")
                 continue
             match_data = {"request": parsed.request, "params": dict(parsed.params),
                           "speak": True}
@@ -268,6 +295,29 @@ class WagglePipeline(ConfidenceMatcherPipeline, OVOSAbstractApplication):
             return IntentHandlerMatch(match_type=UTTERANCE_REQUEST, match_data=match_data,
                                       skill_id=self.skill_id, utterance=utterance)
         return None
+
+    def leave_to_persona(self, phone: Phone, parsed: Parsed) -> bool:
+        """Whether a question the persona answers better should go to it: notifications
+        the phone shares, or the phone's location, when the persona has Waggle's tools."""
+        if self.waggle_settings.raw.get("prefer_persona", True) is not True:
+            return False
+        if parsed.request == LOCATION_GET:
+            return persona_has_tools()
+        if parsed.request == NOTIFICATIONS_GET:
+            request = WaggleRequest(parsed.request, parsed.params)
+            return persona_has_tools() and can_list(phone.capabilities, request)
+        return False
+
+    def home(self) -> Optional[tuple]:
+        """The hub's location from ``mycroft.conf``, as (latitude, longitude), or None."""
+        coordinate = (self.config_core.get("location") or {}).get("coordinate") or {}
+        lat, lon = coordinate.get("latitude"), coordinate.get("longitude")
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lat, lon)):
+            return float(lat), float(lon)
+        return None
+
+    def imperial(self) -> bool:
+        return self.config_core.get("system_unit") == "imperial"
 
     def match_medium(self, utterances: List[str], lang: str,
                      message: Message) -> Optional[IntentHandlerMatch]:

@@ -87,6 +87,7 @@ class Phone:
 CAN_ASK = "can_ask"            # false: it can't ask its user now, so an "ask" rule blocks
 PHONE_ACTIONS = "phone_actions"  # false: it takes no requests now
 WAGGLE_OFF = "waggle_off"      # the queries and commands it won't run now
+ASK_METHODS = "ask_methods"    # {"voice": [rule actions it can confirm by voice now]}
 
 
 def _off(context: dict) -> frozenset[str]:
@@ -95,6 +96,16 @@ def _off(context: dict) -> frozenset[str]:
     if not isinstance(value, list):
         return frozenset()
     return frozenset(name for name in value if isinstance(name, str))
+
+
+def voice_asks(message: Optional[Message]) -> frozenset[str]:
+    """The rule actions the phone can confirm by voice for ``message``'s utterance."""
+    context = message.context if message is not None and isinstance(message.context, dict) else {}
+    methods = context.get(ASK_METHODS)
+    voice = methods.get("voice") if isinstance(methods, dict) else None
+    if not isinstance(voice, list):
+        return frozenset()
+    return frozenset(action for action in voice if isinstance(action, str))
 
 
 def as_heard(phone: Phone, message: Optional[Message]) -> Phone:
@@ -109,7 +120,8 @@ def as_heard(phone: Phone, message: Optional[Message]) -> Phone:
                                           | phone.capabilities.commands):
         return phone
     return replace(phone, capabilities=limited(phone.capabilities, can_ask=can_ask,
-                                               actions=actions, off=off))
+                                               actions=actions, off=off,
+                                               voice=voice_asks(message)))
 
 
 class CapabilityCache:

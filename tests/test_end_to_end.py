@@ -306,3 +306,32 @@ def test_flashlight_from_another_satellite_falls_through(bus, recorder, service,
     recorder.clear()
     say(bus, "turn on the flashlight", OTHER_PEER)
     assert phone.log == [] and phone.torch is False
+
+
+MOM = {"ref": "n1", "app": "Signal", "package": "org.thoughtcrime.securesms", "title": "Mom",
+       "text": "Running late", "time": "2026-10-15T14:58:00Z", "can_reply": True}
+
+
+def test_reply_keeps_the_wording_as_said(bus, recorder, service, make_phone, monkeypatch):
+    """ "Reply to Mom saying …" from the phone: the reply keeps its "!", and the phone asks."""
+    from ovos_skill_waggle import pipeline as pipeline_module
+    monkeypatch.setattr(pipeline_module, "_toolboxes", pipeline_module.weakref.WeakSet())
+    phone = make_phone(notifications=[MOM])
+    recorder.clear()
+    say(bus, "reply to Mom saying I'll be there soon!", PEER)
+    assert phone.replies == [{"ref": "n1", "text": "I'll be there soon!"}]
+    assert [m.data["utterance"] for m in recorder.of("speak")] == [
+        "Confirm on your phone.", "Reply sent to Mom."]
+    handled = recorder.of(HANDLED)
+    assert len(handled) == 1 and handled[0].context["destination"] == PEER
+
+
+def test_notifications_read_on_a_hub_without_a_persona(bus, recorder, service, make_phone,
+                                                       monkeypatch):
+    from ovos_skill_waggle import pipeline as pipeline_module
+    monkeypatch.setattr(pipeline_module, "_toolboxes", pipeline_module.weakref.WeakSet())
+    make_phone(notifications=[MOM])
+    recorder.clear()
+    say(bus, "what did Mom say?", PEER)
+    assert [m.data["utterance"] for m in recorder.of("speak")] == [
+        "You have 1 notification. Mom on Signal: Running late."]

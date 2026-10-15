@@ -34,8 +34,8 @@ from ovos_utils.log import LOG
 
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    DND_SET, MESSAGE_COMPOSE, NAVIGATE_TO, PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP,
-    TORCH_SET, VOLUME_SET, WaggleRequest,
+    DND_SET, LOCATION_GET, MESSAGE_COMPOSE, NAVIGATE_TO, NOTIFICATION_REPLY, NOTIFICATIONS_GET,
+    PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP, TORCH_SET, VOLUME_SET, WaggleRequest,
 )
 from waggle.intents import TIMER_MAX_S, TIMER_MIN_S
 
@@ -540,6 +540,63 @@ def _parse_message(utterance: str) -> Optional[Parsed]:
     return Parsed(MESSAGE_COMPOSE, {"name": name, "body": body.strip()})
 
 
+_REPLY = re.compile(
+    rf"^(?:reply|respond|answer|write back|text back)(?: back)? to (?P<name>[^,:]+?)"
+    rf"(?:(?:,? {_SAYING}|,|:|,? with) (?P<body>.+))?$", re.IGNORECASE)
+
+
+def _parse_reply(utterance: str) -> Optional[Parsed]:
+    """ "Reply to Mom saying I'll be late": a reply in the conversation with Mom."""
+    m = _REPLY.match(_as_said(utterance))
+    if not m:
+        return None
+    name = re.sub(r"'s(?: (?:last|latest))? (?:message|text)$", "", m.group("name").lower())
+    name = _clean_name(re.sub(r"[^\w' -]", " ", name))
+    if not name:
+        return None
+    body = m.group("body")
+    if body is None or not body.strip():
+        return Parsed(NOTIFICATION_REPLY, {"to": name}, missing=MISSING_BODY)
+    return Parsed(NOTIFICATION_REPLY, {"to": name, "body": body.strip()})
+
+
+# --- notifications and location --------------------------------------------------
+
+_NOTICE = r"(?:notifications?|messages?|texts?|text messages?)"
+
+
+def _from(n: int) -> str:
+    return rf"(?: from (?P<f{n}>.+))?"
+
+
+_NOTIFICATIONS = re.compile(
+    rf"^(?:(?:read|check|show|tell me|give me|go through|what are|what're)(?: me)? "
+    rf"(?:my |any |the |all )?(?:new |unread |recent |latest )?{_NOTICE}{_from(1)}|"
+    rf"(?:do i have|have i got|did i get|are there|any) (?:any )?(?:new |unread )?{_NOTICE}"
+    rf"{_from(2)}|"
+    rf"what {_NOTICE} do i have{_from(3)}|"
+    rf"what did (?P<f4>.+?) (?:say|text|write|send|message)(?: me)?|"
+    rf"(?:did|has) (?P<f5>.+?) (?:texted|messaged|written|sent|text|message|write|send|"
+    rf"replied|reply)(?: me| back)?(?: anything| yet)?)$")
+_LOCATION = re.compile(r"^(?:where am i|where are we|what(?:'s| is) my (?:current )?location|"
+                       r"where am i right now)$")
+
+
+def _parse_notifications(text: str) -> Optional[Parsed]:
+    m = _NOTIFICATIONS.match(text)
+    if not m:
+        return None
+    sender = next((m.group(f"f{n}") for n in range(1, 6) if m.group(f"f{n}")), None)
+    if sender is None:
+        return Parsed(NOTIFICATIONS_GET, {})
+    sender = _clean_name(sender)
+    return Parsed(NOTIFICATIONS_GET, {"from": sender}) if sender else None
+
+
+def _parse_location(text: str) -> Optional[Parsed]:
+    return Parsed(LOCATION_GET, {}) if _LOCATION.match(text) else None
+
+
 # --- apps --------------------------------------------------------------------
 
 _OPEN = re.compile(r"^(?:open|launch|start|run|bring up|pull up|fire up|switch to)(?: up)? "
@@ -955,7 +1012,8 @@ def parse_utterance(utterance: str, lang: str, now: datetime) -> Optional[Parsed
     stop = _parse_stop(digitize(text), now)
     if stop is not None:
         return stop
-    phone = _parse_status(text) or _parse_settings(digitize(text)) or _parse_navigate(text)
+    phone = (_parse_status(text) or _parse_settings(digitize(text)) or _parse_navigate(text)
+             or _parse_location(text) or _parse_notifications(text) or _parse_reply(utterance))
     if phone is not None:
         return phone
     # "what time is my alarm set for" asks, it doesn't set.

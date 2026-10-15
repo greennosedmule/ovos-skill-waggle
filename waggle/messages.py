@@ -39,6 +39,8 @@ class ErrorCode(str, Enum):
     BAD_REQUEST = "bad_request"
     UNSUPPORTED_VERSION = "unsupported_version"
     CANNOT_ASK = "cannot_ask"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
 
 
 class Mode(str, Enum):
@@ -61,7 +63,10 @@ CALENDAR_NEXT = "calendar.next"
 CONTACTS_LOOKUP = "contacts.lookup"
 APPS_LIST = "apps.list"
 PHONE_STATUS = "phone.status"
-QUERY_NAMES = frozenset({CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS})
+NOTIFICATIONS_LIST = "notifications.list"
+PHONE_LOCATION = "phone.location"
+QUERY_NAMES = frozenset({CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS,
+                         NOTIFICATIONS_LIST, PHONE_LOCATION})
 
 # Commands (WAGGLE.md "waggle.command"). Their names share the rules' action namespace with
 # Android's intent actions, so they all start with COMMAND_PREFIX, which no intent may use.
@@ -70,7 +75,9 @@ TORCH_SET = "waggle.torch.set"
 VOLUME_SET = "waggle.volume.set"
 RINGER_SET = "waggle.ringer.set"
 DND_SET = "waggle.dnd.set"
-COMMAND_NAMES = frozenset({TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET})
+READ_ALOUD = "waggle.notifications.read_aloud"
+REPLY = "waggle.notification.reply"
+COMMAND_NAMES = frozenset({TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY})
 VOLUME_STREAMS = ("media", "ring", "alarm", "call")
 VOLUME_STEPS = ("up", "down")
 RINGER_MODES = ("normal", "vibrate", "silent")
@@ -389,6 +396,20 @@ def _validate_params(name: str, params: dict) -> None:
     elif name == APPS_LIST:
         _str(params, "name")
         _int_param(params, "limit", 20, 1)
+    elif name == NOTIFICATIONS_LIST:
+        _notification_filters(params, default_limit=10)
+        if params.get("since") is not None and not isinstance(from_wire_time(params["since"]),
+                                                              datetime):
+            raise bad_request("param 'since' must be a time, not a date")
+    elif name == PHONE_LOCATION:
+        _int_param(params, "max_age_s", 120, 0)
+
+
+def _notification_filters(params: dict, default_limit: int) -> None:
+    """``app`` and ``from`` (optional strings) and ``limit`` (1–20)."""
+    for key in ("app", "from"):
+        _str(params, key)
+    _int_param(params, "limit", default_limit, 1, 20)
 
 
 @dataclass(frozen=True)
@@ -441,6 +462,13 @@ def _validate_command(name: str, params: dict) -> None:
         _bool_param(params, "on")
     elif name == RINGER_SET:
         _choice_param(params, "mode", RINGER_MODES)
+    elif name == READ_ALOUD:
+        _notification_filters(params, default_limit=5)
+    elif name == REPLY:
+        _str(params, "text", required=True)
+        if ("ref" in params) == ("to" in params):
+            raise bad_request("waggle.notification.reply needs exactly one of 'ref' and 'to'")
+        _str(params, "ref" if "ref" in params else "to", required=True)
     elif name == VOLUME_SET:
         _choice_param(params, "stream", VOLUME_STREAMS, "media")
         if ("level" in params) == ("step" in params):
@@ -479,10 +507,12 @@ class Command:
             return "on" if self.params["on"] else "off"
         return None
 
-    def as_intent(self) -> Intent:
+    def as_intent(self, package: Optional[str] = None) -> Intent:
         """The stand-in the rules judge: the command's name as the action, its variant as
-        the category. None of these commands has a target app, so there's no package."""
-        return Intent(id=self.id, action=self.name,
+        the category, and its target app as the package. Only a reply has a target app
+        (the notification's), which the phone finds from ``ref`` or ``to``; the hub
+        passes the one it expects."""
+        return Intent(id=self.id, action=self.name, package=package,
                       categories=(self.variant,) if self.variant else ())
 
     @classmethod

@@ -15,6 +15,11 @@ only. The settings requests (``torch.set``, ``volume.set``, ``ringer.set``,
 ``dnd.set``) each send one ``waggle.command``, which the phone runs itself;
 they're allowed when the phone announced the command and its rules allow it.
 
+``notifications.get`` lists them with the ``notifications.list`` query, or has
+the phone read them aloud with a command; its ``mode`` says which may be used.
+``notification.reply`` sends a command, judged before any lookup by a reply
+with no target app. ``location.get`` is a query only.
+
 ``timers.stop`` sends two intents, ``DISMISS_TIMER`` (a ringing timer) and then
 ``SHOW_TIMERS`` (so the user can cancel a running one: no intent can), and is
 allowed when either is. Dismissing comes first: it shows nothing, while the
@@ -27,15 +32,16 @@ from typing import Callable, Optional
 
 from waggle import commands, intents
 from waggle.messages import (
-    APPS_LIST, CALENDAR_NEXT as Q_CALENDAR_NEXT, CONTACTS_LOOKUP, PHONE_STATUS as Q_PHONE_STATUS,
-    Capabilities, Command, Intent, new_request_id,
+    APPS_LIST, CALENDAR_NEXT as Q_CALENDAR_NEXT, CONTACTS_LOOKUP, NOTIFICATIONS_LIST,
+    PHONE_LOCATION, PHONE_STATUS as Q_PHONE_STATUS, Capabilities, Command, Intent,
+    new_request_id,
 )
 from waggle.rules import decide_command, decide_for, query_enabled
 
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    DND_SET, MESSAGE_COMPOSE, NAVIGATE_TO, PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP,
-    TORCH_SET, VOLUME_SET, WaggleRequest,
+    DND_SET, LOCATION_GET, MESSAGE_COMPOSE, NAVIGATE_TO, NOTIFICATION_REPLY, NOTIFICATIONS_GET,
+    PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP, TORCH_SET, VOLUME_SET, WaggleRequest,
 )
 from ovos_skill_waggle.settings import Settings
 
@@ -101,7 +107,7 @@ COMMAND_BUILDERS: dict[str, Callable[[WaggleRequest], Command]] = {
 # The requests this release runs.
 SUPPORTED_REQUESTS = (frozenset(INTENT_BUILDERS) | frozenset(COMMAND_BUILDERS)
                       | {CALENDAR_NEXT, APP_OPEN, CONTACT_CALL, MESSAGE_COMPOSE, TIMERS_STOP,
-                         PHONE_STATUS})
+                         PHONE_STATUS, NOTIFICATIONS_GET, NOTIFICATION_REPLY, LOCATION_GET})
 
 
 def timers_stop_intents(settings: Settings) -> list[Intent]:
@@ -117,6 +123,25 @@ def build_intent(request: WaggleRequest, settings: Settings) -> Intent:
     for params the builder rejects.
     """
     return INTENT_BUILDERS[request.request](request, settings)
+
+
+def read_aloud_command(request: WaggleRequest) -> Command:
+    """The phone-reads-aloud command for a ``notifications.get``."""
+    p = request.params
+    return commands.read_aloud(app=p.get("app"), sender=p.get("from"),
+                               limit=p.get("limit", 5))
+
+
+def can_list(capabilities: Capabilities, request: WaggleRequest) -> bool:
+    """Whether a ``notifications.get`` may list the notifications on the hub."""
+    return request.params["mode"] in ("list", "any") and \
+        query_enabled(capabilities, NOTIFICATIONS_LIST)
+
+
+def can_read_aloud(capabilities: Capabilities, request: WaggleRequest) -> bool:
+    """Whether a ``notifications.get`` may have the phone read them aloud."""
+    return request.params["mode"] in ("aloud", "any") and \
+        decide_command(capabilities, read_aloud_command(request)).allowed
 
 
 def build_command(request: WaggleRequest) -> Command:
@@ -151,6 +176,8 @@ def required_query(request: WaggleRequest) -> Optional[str]:
         return Q_CALENDAR_NEXT
     if request.request == PHONE_STATUS:
         return Q_PHONE_STATUS
+    if request.request == LOCATION_GET:
+        return PHONE_LOCATION
     if request.request == APP_OPEN:
         return APPS_LIST
     if request.request in (CONTACT_CALL, MESSAGE_COMPOSE):
@@ -192,6 +219,12 @@ def phone_allows(capabilities: Capabilities, request: WaggleRequest, settings: S
         return any(decide_for(capabilities, i).allowed for i in timers_stop_intents(settings))
     if request.request in COMMAND_BUILDERS:
         return decide_command(capabilities, build_command(request)).allowed
+    if request.request == NOTIFICATIONS_GET:
+        return can_list(capabilities, request) or can_read_aloud(capabilities, request)
+    if request.request == NOTIFICATION_REPLY:
+        # Before the lookup there's no target app, so a rule for one app can't be judged.
+        stand_in = commands.reply("-", to="-")
+        return decide_command(capabilities, stand_in).allowed
     try:
         intent = precheck_intent(request, settings)
     except ValueError:

@@ -19,7 +19,8 @@ def test_names():
     assert r.REQUEST_NAMES == ("alarm.set", "timer.set", "alarms.show", "calendar.next",
                                "app.open", "contact.call", "message.compose", "timers.stop",
                                "alarm.dismiss", "alarm.snooze", "navigate.to", "phone.status",
-                               "torch.set", "volume.set", "ringer.set", "dnd.set")
+                               "torch.set", "volume.set", "ringer.set", "dnd.set",
+                               "notifications.get", "notification.reply", "location.get")
     assert r.UNREACHABLE == "unreachable"
 
 

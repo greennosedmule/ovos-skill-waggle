@@ -12,8 +12,9 @@ from conftest import capabilities, utterance
 from test_handlers import request, run, spoken
 from test_tools import ALL_TOOLS, offered, persona_query
 
-# The fake phone's default rules ask before these three.
-ASKING_TOOLS = {"dismiss_alarm", "call_contact", "compose_text_message"}
+# The fake phone's default rules ask before these four.
+ASKING_TOOLS = {"dismiss_alarm", "call_contact", "compose_text_message",
+                "reply_to_notification"}
 TIMER = ("timer.set", {"seconds": 600})
 
 

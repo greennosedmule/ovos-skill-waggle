@@ -36,10 +36,14 @@ TORCH_SET = "torch.set"
 VOLUME_SET = "volume.set"
 RINGER_SET = "ringer.set"
 DND_SET = "dnd.set"
+NOTIFICATIONS_GET = "notifications.get"
+NOTIFICATION_REPLY = "notification.reply"
+LOCATION_GET = "location.get"
 
 REQUEST_NAMES = (ALARM_SET, TIMER_SET, ALARMS_SHOW, CALENDAR_NEXT, APP_OPEN, CONTACT_CALL,
                  MESSAGE_COMPOSE, TIMERS_STOP, ALARM_DISMISS, ALARM_SNOOZE, NAVIGATE_TO,
-                 PHONE_STATUS, TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
+                 PHONE_STATUS, TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, NOTIFICATIONS_GET,
+                 NOTIFICATION_REPLY, LOCATION_GET)
 # The settings requests, each run by one waggle.command.
 SETTINGS_REQUESTS = (TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
 
@@ -47,6 +51,9 @@ SETTINGS_REQUESTS = (TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
 DISMISS_MODES = ("time", "next", "label", "all")
 # What phone.status reports on.
 STATUS_PARTS = ("battery", "network", "sound", "all")
+# How notifications.get reads them: listed for the hub (and the persona), read aloud by
+# the phone itself, or whichever the phone allows (the list first).
+NOTIFICATION_MODES = ("list", "aloud", "any")
 
 # No response from the phone, or the phone isn't connected; not a WAGGLE.md code.
 UNREACHABLE = "unreachable"
@@ -116,7 +123,21 @@ _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
                  "step": (False, _one_of(VOLUME_STEPS), "up or down")},
     RINGER_SET: {"mode": (True, _one_of(RINGER_MODES), "normal, vibrate or silent")},
     DND_SET: {"on": (True, _is_bool, "a boolean")},
+    NOTIFICATIONS_GET: {"app": (False, _is_text, "a non-empty string"),
+                        "from": (False, _is_text, "a non-empty string"),
+                        "limit": (False, _int(1, 20), "an integer 1–20"),
+                        "mode": (False, _one_of(NOTIFICATION_MODES), "list, aloud or any")},
+    # One of to (a name) and ref (from a listing); see _check_reply.
+    NOTIFICATION_REPLY: {"to": (False, _is_text, "a non-empty string"),
+                         "ref": (False, _is_text, "a non-empty string"),
+                         "body": (True, _is_text, "a non-empty string")},
+    LOCATION_GET: {},
 }
+
+
+def _check_reply(params: dict) -> None:
+    if ("to" in params) == ("ref" in params):
+        raise bad_request("notification.reply needs exactly one of 'to' and 'ref'")
 
 
 def _check_volume(params: dict) -> None:
@@ -175,6 +196,10 @@ class WaggleRequest:
             _check_dismiss(self.params)
         if self.request == VOLUME_SET:
             _check_volume(self.params)
+        if self.request == NOTIFICATION_REPLY:
+            _check_reply(self.params)
+        if self.request == NOTIFICATIONS_GET:
+            self.params.setdefault("mode", "any")
 
     @classmethod
     def from_dict(cls, d: Any) -> "WaggleRequest":
@@ -201,6 +226,7 @@ class RequestResponse:
     ok: bool
     summary: str
     error: Optional[str] = None
+    data: Optional[dict] = None  # what was read, for a caller that isn't speaking it
 
     def __post_init__(self):
         if not isinstance(self.ok, bool):
@@ -209,6 +235,8 @@ class RequestResponse:
             raise bad_request("'summary' must be a non-empty string")
         if self.ok == (self.error is not None):
             raise bad_request("'error' must be set if and only if 'ok' is false")
+        if self.data is not None and not isinstance(self.data, dict):
+            raise bad_request("'data' must be an object")
         if self.error is not None:
             error = self.error.value if isinstance(self.error, ErrorCode) else self.error
             if error not in RESPONSE_ERRORS:
@@ -216,8 +244,8 @@ class RequestResponse:
             object.__setattr__(self, "error", error)
 
     @classmethod
-    def success(cls, summary: str) -> "RequestResponse":
-        return cls(ok=True, summary=summary)
+    def success(cls, summary: str, data: Optional[dict] = None) -> "RequestResponse":
+        return cls(ok=True, summary=summary, data=data)
 
     @classmethod
     def failure(cls, error: ErrorCode | str, summary: str) -> "RequestResponse":
@@ -227,12 +255,15 @@ class RequestResponse:
     def from_dict(cls, d: Any) -> "RequestResponse":
         if not isinstance(d, dict):
             raise bad_request("request response must be an object")
-        return cls(ok=d.get("ok"), summary=d.get("summary"), error=d.get("error"))
+        return cls(ok=d.get("ok"), summary=d.get("summary"), error=d.get("error"),
+                   data=d.get("data"))
 
     def to_dict(self) -> dict:
         d = {"ok": self.ok, "summary": self.summary}
         if self.error is not None:
             d["error"] = self.error
+        if self.data is not None:
+            d["data"] = self.data
         return d
 
 

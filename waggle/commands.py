@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Optional
 
 from waggle.messages import (
-    DND_SET, RINGER_SET, TORCH_SET, VOLUME_SET, Command, new_request_id,
+    DND_SET, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET, VOLUME_SET, Command, _drop_none,
+    new_request_id,
 )
 
 
@@ -45,3 +46,22 @@ def ringer(mode: str, *, id: Optional[str] = None) -> Command:
 def dnd(on: bool, *, id: Optional[str] = None) -> Command:
     """Turn Do Not Disturb on (priority only) or off."""
     return _command(DND_SET, {"on": on}, f"Turn Do Not Disturb {'on' if on else 'off'}", id)
+
+
+def read_aloud(*, app: Optional[str] = None, sender: Optional[str] = None, limit: int = 5,
+               id: Optional[str] = None) -> Command:
+    """Have the phone read its notifications aloud itself; ``sender`` is the wire's ``from``."""
+    who = f" from {sender}" if sender else ""
+    return _command(READ_ALOUD, _drop_none({"app": app, "from": sender, "limit": limit}),
+                    f"Read your notifications{who} aloud", id)
+
+
+def reply(text: str, *, ref: Optional[str] = None, to: Optional[str] = None,
+          name: Optional[str] = None, id: Optional[str] = None) -> Command:
+    """Reply ``text`` to the notification ``ref``, or to the conversation matching ``to``.
+
+    ``name`` is who it goes to, for the description the phone shows.
+    """
+    who = name or to or "the conversation"
+    return _command(REPLY, _drop_none({"ref": ref, "to": to, "text": text}),
+                    f'Reply to {who}: "{text}"', id)

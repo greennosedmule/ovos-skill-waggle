@@ -81,7 +81,7 @@ def test_command_names_are_reserved_for_commands():
 
 def test_capabilities_carry_commands():
     caps = DEFAULT_CAPABILITIES
-    assert caps.commands == {TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET}
+    assert {TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET} <= caps.commands
     assert Capabilities.from_dict(caps.to_dict()) == caps
     with pytest.raises(WaggleError):
         Capabilities.from_dict({**caps.to_dict(), "commands": "waggle.torch.set"})
@@ -400,8 +400,9 @@ def toolbox():
 
 def test_older_phone_gets_no_new_tools(toolbox, pipeline, make_phone):
     make_phone(capabilities=older_phone())
+    # Notifications and location are still listed: older_phone drops only 0.10.0's additions.
     assert offered(toolbox, persona_query()) == ALL_TOOLS - SETTINGS_TOOLS - {
-        "get_phone_status", "navigate_to"}
+        "get_phone_status", "navigate_to", "reply_to_notification"}
 
 
 def test_waggle_off_hides_tools(toolbox, pipeline, make_phone):
@@ -424,7 +425,7 @@ def test_set_volume_tool_needs_one_of_level_and_step(toolbox, pipeline, make_pho
 
 def without_torch():
     """The default rules, but no flashlight among the commands (a phone without a flash)."""
-    return capabilities(commands=[VOLUME_SET, RINGER_SET, DND_SET])
+    return capabilities(commands=sorted(DEFAULT_CAPABILITIES.commands - {TORCH_SET}))
 
 
 def test_a_rule_alone_doesnt_allow_an_unannounced_command(bus, recorder, pipeline, make_phone,

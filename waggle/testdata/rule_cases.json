@@ -1,5 +1,5 @@
 {
-  "description": "Waggle v1 rule-matching cases (WAGGLE.md, 'Rule matching'), shared by the waggle Python library and the Wiggins Android client so both matchers agree. Each case gives the phone's rules (WAGGLE.md rule objects, as in waggle.capabilities), an optional 'unmatched' mode ('block' or 'ask'; absent means the WAGGLE.md default, 'block'), and the data of a waggle.intent. A waggle.command is judged as the intent whose action is the command's name and whose categories are its variant (WAGGLE.md 'waggle.command'), so command cases are written that way. 'expect.mode' is the decision; 'expect.rule' is the 0-based index into 'rules' of the rule that decided, or null when no rule matched and 'unmatched' applied. No case has two rules that tie on both specificity and mode, so the deciding rule is unique.",
+  "description": "Waggle v1 rule-matching cases (WAGGLE.md, 'Rule matching'), shared by the waggle Python library and the Wiggins Android client so both matchers agree. Each case gives the phone's rules (WAGGLE.md rule objects, as in waggle.capabilities), an optional 'unmatched' mode ('block' or 'ask'; absent means the WAGGLE.md default, 'block'), and the data of a waggle.intent. A waggle.command is judged as the intent whose action is the command's name and whose categories are its variant and whose package is its target app (WAGGLE.md 'waggle.command'), so command cases are written that way. 'expect.mode' is the decision; 'expect.rule' is the 0-based index into 'rules' of the rule that decided, or null when no rule matched and 'unmatched' applied. No case has two rules that tie on both specificity and mode, so the deciding rule is unique.",
   "version": 1,
   "cases": [
     {
@@ -570,6 +570,24 @@
       ],
       "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "waggle.volume.set"},
       "expect": {"mode": "block", "rule": null}
+    },
+    {
+      "name": "command: a reply rule for one app beats the plain reply rule",
+      "rules": [
+        {"action": "waggle.notification.reply", "mode": "ask"},
+        {"action": "waggle.notification.reply", "package": "org.thoughtcrime.securesms", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "waggle.notification.reply", "package": "org.thoughtcrime.securesms"},
+      "expect": {"mode": "run", "rule": 1}
+    },
+    {
+      "name": "command: a reply in another app follows the plain reply rule",
+      "rules": [
+        {"action": "waggle.notification.reply", "mode": "ask"},
+        {"action": "waggle.notification.reply", "package": "org.thoughtcrime.securesms", "mode": "run"}
+      ],
+      "intent": {"id": "5f0c1e9a-3b7d-4c4e-9a51-2f8e6b0d7c11", "action": "waggle.notification.reply", "package": "com.whatsapp"},
+      "expect": {"mode": "ask", "rule": 0}
     }
   ]
 }

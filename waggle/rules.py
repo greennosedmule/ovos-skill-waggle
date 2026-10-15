@@ -44,12 +44,13 @@ def decide_for(capabilities: Capabilities, intent: Intent) -> Decision:
     return decide(capabilities.rules, intent, capabilities.unmatched)
 
 
-def decide_command(capabilities: Capabilities, command: Command) -> Decision:
+def decide_command(capabilities: Capabilities, command: Command,
+                   package: Optional[str] = None) -> Decision:
     """The phone's decision on a command: blocked unless it announced the command, and
-    then its rules, judging the command's stand-in intent."""
+    then its rules, judging the command's stand-in intent (for a reply to ``package``)."""
     if command.name not in capabilities.commands:
         return Decision(Mode.BLOCK)
-    return decide_for(capabilities, command.as_intent())
+    return decide_for(capabilities, command.as_intent(package))
 
 
 def query_enabled(capabilities: Capabilities, name: str) -> bool:
@@ -57,13 +58,16 @@ def query_enabled(capabilities: Capabilities, name: str) -> bool:
 
 
 def limited(capabilities: Capabilities, *, can_ask: bool = True,
-            actions: bool = True, off: Iterable[str] = ()) -> Capabilities:
+            actions: bool = True, off: Iterable[str] = (),
+            voice: Iterable[str] = ()) -> Capabilities:
     """``capabilities`` as they apply to one utterance (WAGGLE.md "Common rules").
 
     Without ``actions`` every rule blocks and no query is enabled; without
-    ``can_ask`` an "ask" blocks, since the phone can't ask its user now. The
+    ``can_ask`` an "ask" blocks, since the phone can't ask its user now, except
+    for the rule actions in ``voice``, which it can confirm by voice. The
     queries and commands named in ``off`` aren't available for this utterance.
     """
+    voice = frozenset(voice)
     off = frozenset(off)
     if off & (capabilities.queries | capabilities.commands):
         capabilities = replace(capabilities, queries=capabilities.queries - off,
@@ -75,6 +79,7 @@ def limited(capabilities: Capabilities, *, can_ask: bool = True,
         return replace(capabilities,
                        unmatched=Mode.BLOCK if capabilities.unmatched is Mode.ASK
                        else capabilities.unmatched,
-                       rules=tuple(replace(r, mode=Mode.BLOCK) if r.mode is Mode.ASK else r
+                       rules=tuple(replace(r, mode=Mode.BLOCK)
+                                   if r.mode is Mode.ASK and r.action not in voice else r
                                    for r in capabilities.rules))
     return capabilities

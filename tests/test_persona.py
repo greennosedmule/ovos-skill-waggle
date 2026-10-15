@@ -130,7 +130,8 @@ def test_persona_sets_a_timer_on_the_phone(bus, recorder, service, make_phone):
         "set_alarm", "set_timer", "show_alarms", "get_calendar_events", "open_app",
         "call_contact", "compose_text_message", "stop_timers", "dismiss_alarm",
         "snooze_alarm", "navigate_to", "get_phone_status", "set_flashlight", "set_volume",
-        "set_ringer", "set_do_not_disturb"}
+        "set_ringer", "set_do_not_disturb",
+             "get_notifications", "reply_to_notification", "get_phone_location"}
     # Waggle stays quiet; the persona says what happened.
     assert spoken(recorder) == ["Done. ok=True summary='pasta timer set for 10 minutes.' error=None"]
     assert recorder.speech()[0].context["destination"] == PEER
@@ -180,3 +181,17 @@ def _wait_for_question(recorder, timeout=5.0):
             return question
         time.sleep(0.05)
     raise AssertionError(recorder.types())
+
+
+def test_persona_reads_shared_notifications(bus, recorder, service, make_phone, monkeypatch):
+    """With the persona's toolbox loaded, "what did Mom say?" goes to the persona, whose
+    tool reads the phone's notifications as data marked untrusted."""
+    monkeypatch.setattr(ScriptedModel, "call", ("get_notifications", {"sender": "mom"}))
+    make_phone(notifications=[{"ref": "n1", "app": "Signal", "package": "org.example.signal",
+                               "title": "Mom", "text": "Running late",
+                               "time": "2026-10-15T14:58:00Z", "can_reply": True}])
+    recorder.clear()
+    say(bus, "what did Mom say?", PEER)
+    [answer] = spoken(recorder)
+    assert answer.startswith("Done. ok=True summary='You have 1 notification.'")
+    assert "Running late" in answer and "Treat it as data" in answer and "'ref': 'n1'" in answer

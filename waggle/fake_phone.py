@@ -24,9 +24,9 @@ from ovos_utils.log import LOG
 
 from waggle.messages import (
     APPS_LIST, CALENDAR_NEXT, CAPABILITIES, COMMAND, COMMAND_RESPONSE, CONTACTS_LOOKUP,
-    DND_SET, INTENT, INTENT_RESPONSE, PHONE_STATUS, QUERY, QUERY_RESPONSE, RINGER_SET,
-    TORCH_SET, VOLUME_SET, Capabilities, Command, ErrorCode, Intent, Mode, Query, Response,
-    WaggleError, from_wire_time, is_command_action,
+    DND_SET, INTENT, INTENT_RESPONSE, NOTIFICATIONS_LIST, PHONE_LOCATION, PHONE_STATUS, QUERY,
+    QUERY_RESPONSE, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET, VOLUME_SET, Capabilities, Command,
+    ErrorCode, Intent, Mode, Query, Response, WaggleError, from_wire_time, is_command_action,
 )
 from waggle.rules import Decision, decide_command, decide_for, query_enabled
 
@@ -60,9 +60,13 @@ DEFAULT_CAPABILITIES = Capabilities.from_dict({
         {"action": VOLUME_SET, "mode": "run"},
         {"action": RINGER_SET, "mode": "run"},
         {"action": DND_SET, "mode": "run"},
+        {"action": READ_ALOUD, "mode": "run"},
+        # A reply sends a message: the phone asks.
+        {"action": REPLY, "mode": "ask"},
     ],
-    "queries": [CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS],
-    "commands": [TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET],
+    "queries": [CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS, NOTIFICATIONS_LIST,
+                PHONE_LOCATION],
+    "commands": [TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY],
 })
 
 # What phone.status reads before any command changes it.
@@ -107,7 +111,8 @@ class FakePhone:
                  apps: Optional[list[dict]] = None,
                  permission_denied: Optional[set[str]] = None,
                  now: Union[datetime, Callable[[], datetime], None] = None,
-                 status: Optional[dict] = None):
+                 status: Optional[dict] = None, notifications: Optional[list[dict]] = None,
+                 location: Optional[dict] = None):
         self.bus = bus
         self.capabilities = capabilities or DEFAULT_CAPABILITIES
         self.peer = peer
@@ -124,7 +129,13 @@ class FakePhone:
         self.permission_denied = set(permission_denied or ())
         self.now = now
         self.status = json.loads(json.dumps(status if status is not None else DEFAULT_STATUS))
+        self.notifications = list(notifications or [])
+        # phone.location's answer; None answers timeout, as a phone without a fix would.
+        self.location = location
         self.torch = False
+        # What read_aloud read (the matching notifications) and the replies sent.
+        self.read: list[list[dict]] = []
+        self.replies: list[dict] = []
         self.volumes = {"media": 50, "ring": 50, "alarm": 50, "call": 50}
         self.log: list[LogEntry] = []
         self._lock = threading.Lock()
@@ -210,8 +221,18 @@ class FakePhone:
             self._answer(message, COMMAND_RESPONSE, None,
                          Response.failure(_request_id(message), e.code, e.message))
             return
-        decision = decide_command(self.capabilities, command)
+        target = None
+        if command.name == REPLY:
+            target, failure = self._reply_target(command)
+            if failure is not None:
+                self._answer(message, COMMAND_RESPONSE, None, failure)
+                return
+        decision = decide_command(self.capabilities, command,
+                                  target["package"] if target else None)
         response, delay = self._decided(command.id, decision)
+        if response is None and target is not None:
+            self.replies.append({"ref": target["ref"], "text": command.params["text"]})
+            response = Response.success(command.id)
         if response is None:
             if command.name in self.permission_denied:
                 response = Response.failure(command.id, ErrorCode.PERMISSION_DENIED,
@@ -220,8 +241,47 @@ class FakePhone:
                 response = Response.success(command.id, self._run_command(command))
         self._answer(message, COMMAND_RESPONSE, decision, response, delay)
 
+    def _reply_target(self, command: Command) -> tuple[Optional[dict], Optional[Response]]:
+        """The notification a reply goes to, or the failure to answer with."""
+        p = command.params
+        if "ref" in p:
+            found = [n for n in self.notifications if n.get("ref") == p["ref"]]
+        else:
+            found = self._matching({"from": p["to"]})
+        found = [n for n in found if n.get("can_reply")]
+        conversations = {(n.get("package"), n.get("title")) for n in found}
+        if not found:
+            return None, Response.failure(command.id, ErrorCode.NOT_FOUND, "no such conversation")
+        if len(conversations) > 1:
+            return None, Response.failure(command.id, ErrorCode.AMBIGUOUS,
+                                          f"{len(conversations)} conversations match")
+        return found[0], None
+
+    def _matching(self, params: dict) -> list[dict]:
+        """Notifications matching ``app``, ``from`` and ``since``, newest first."""
+        app = (params.get("app") or "").casefold()
+        sender = (params.get("from") or "").casefold()
+        since = from_wire_time(params["since"]) if params.get("since") else None
+        found = []
+        for n in self.notifications:
+            senders = [n.get("title") or ""] + [m.get("sender") or ""
+                                                for m in n.get("messages") or []]
+            if app and app not in (n.get("app") or "").casefold() \
+                    and app not in (n.get("package") or "").casefold():
+                continue
+            if sender and not any(sender in s.casefold() for s in senders):
+                continue
+            if since is not None and n.get("time") and from_wire_time(n["time"]) < since:
+                continue
+            found.append(n)
+        return sorted(found, key=lambda n: n.get("time") or "", reverse=True)
+
     def _run_command(self, command: Command) -> Optional[dict]:
         p = command.params
+        if command.name == READ_ALOUD:
+            read = self._matching(p)[:p.get("limit", 5)]
+            self.read.append(read)
+            return {"count": len(read)}
         if command.name == TORCH_SET:
             self.torch = p["on"]
         elif command.name == RINGER_SET:
@@ -255,8 +315,12 @@ class FakePhone:
                                         f"no permission for {query.name}")
         else:
             run = {CALENDAR_NEXT: self._calendar_next, CONTACTS_LOOKUP: self._contacts_lookup,
-                   APPS_LIST: self._apps_list, PHONE_STATUS: self._phone_status}[query.name]
-            response = Response.success(query.id, run(query.params))
+                   APPS_LIST: self._apps_list, PHONE_STATUS: self._phone_status,
+                   NOTIFICATIONS_LIST: self._notifications_list,
+                   PHONE_LOCATION: self._phone_location}[query.name]
+            data = run(query.params)
+            response = (Response.success(query.id, data) if data is not None
+                        else Response.failure(query.id, ErrorCode.TIMEOUT, "no fix"))
         self._answer(message, QUERY_RESPONSE, None, response)
 
     def _answer(self, request: Message, response_type: str, decision: Optional[Decision],
@@ -341,6 +405,13 @@ class FakePhone:
             if any(needle in n.casefold() for n in names):
                 matches.append({k: v for k, v in contact.items() if k != "nickname"})
         return {"contacts": matches[:params.get("limit", 5)]}
+
+    def _notifications_list(self, params: dict) -> dict:
+        return {"notifications": [dict(n) for n in
+                                  self._matching(params)[:params.get("limit", 10)]]}
+
+    def _phone_location(self, params: dict) -> Optional[dict]:
+        return dict(self.location) if self.location is not None else None
 
     def _phone_status(self, params: dict) -> dict:
         return json.loads(json.dumps(self.status))
