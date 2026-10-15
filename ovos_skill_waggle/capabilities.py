@@ -86,18 +86,30 @@ class Phone:
 # absent, the phone's announced rules apply as they are.
 CAN_ASK = "can_ask"            # false: it can't ask its user now, so an "ask" rule blocks
 PHONE_ACTIONS = "phone_actions"  # false: it takes no requests now
+WAGGLE_OFF = "waggle_off"      # the queries and commands it won't run now
+
+
+def _off(context: dict) -> frozenset[str]:
+    """The names in ``waggle_off``; anything but a list of strings counts as none."""
+    value = context.get(WAGGLE_OFF)
+    if not isinstance(value, list):
+        return frozenset()
+    return frozenset(name for name in value if isinstance(name, str))
 
 
 def as_heard(phone: Phone, message: Optional[Message]) -> Phone:
     """``phone`` with its rules as they apply to ``message``'s utterance: the same object
-    unless the phone said it can't ask, or takes no requests, right now."""
+    unless the phone said it can't ask, takes no requests, or won't run some queries or
+    commands, right now."""
     context = message.context if message is not None and isinstance(message.context, dict) else {}
     can_ask = context.get(CAN_ASK) is not False
     actions = context.get(PHONE_ACTIONS) is not False
-    if can_ask and actions:
+    off = _off(context)
+    if can_ask and actions and not off & (phone.capabilities.queries
+                                          | phone.capabilities.commands):
         return phone
     return replace(phone, capabilities=limited(phone.capabilities, can_ask=can_ask,
-                                               actions=actions))
+                                               actions=actions, off=off))
 
 
 class CapabilityCache:

@@ -34,7 +34,8 @@ from ovos_utils.log import LOG
 
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, WaggleRequest,
+    DND_SET, MESSAGE_COMPOSE, NAVIGATE_TO, PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP,
+    TORCH_SET, VOLUME_SET, WaggleRequest,
 )
 from waggle.intents import TIMER_MAX_S, TIMER_MIN_S
 
@@ -555,6 +556,200 @@ def _parse_app(text: str) -> Optional[Parsed]:
     return Parsed(APP_OPEN, {"name": name}, check_app=m.group("app") is None)
 
 
+# --- navigation ----------------------------------------------------------------
+
+_NAV = re.compile(
+    r"^(?:start )?(?:navigat(?:e|ion|ing)|(?:give me |get |show me )?(?:the )?directions|"
+    r"show me the (?:way|route)|take me|drive me|guide me|route me|"
+    r"how (?:do|can) i (?:get|drive)|what'?s the (?:best |fastest )?(?:way|route))"
+    r" (?:to|for) (?P<dest>.+)$")
+_NAV_HOME = re.compile(r"^(?:navigate|take me|drive me|directions|navigation) (?P<dest>home)$")
+
+
+def _parse_navigate(text: str) -> Optional[Parsed]:
+    m = _NAV.match(text) or _NAV_HOME.match(text)
+    if not m:
+        return None
+    destination = _sub(r"^the ", "", m.group("dest")).strip()
+    return Parsed(NAVIGATE_TO, {"destination": destination}) if destination else None
+
+
+# --- phone status ----------------------------------------------------------------
+#
+# Questions only: "is do not disturb on" asks, "do not disturb on" sets.
+
+_QUESTION = (r"^(?:what|what's|whats|how|how's|hows|is|are|am|check|tell me|show me|give me|"
+             r"do i|does|did)\b")
+_BATTERY = re.compile(r"\b(?:battery|charge left|charging)\b")
+_BATTERY_NOT = re.compile(r"\b(?:saver|saving|save|health|optimi[sz]ation)\b")
+_BATTERY_TAIL = re.compile(r"^(?:my |the |phone )*battery(?: level| life| status| percentage| "
+                           r"percent)?$")
+_NETWORK = re.compile(
+    r"^(?:am i|is (?:my |the )?phone|are we) (?:on|connected to|using) (?:the )?"
+    r"(?:wi ?fi|mobile data|cellular|data|internet|a network|lte|5g|4g)$|"
+    r"^(?:what|which) (?:network|wi ?fi)(?: am i| is (?:my |the )?phone)? "
+    r"(?:on|connected to|using)$|"
+    r"^(?:do i|does (?:my |the )?phone) have (?:a |any )?(?:signal|internet|data|wi ?fi|"
+    r"connection|network|reception)$")
+_SOUND = re.compile(
+    r"^is (?:my |the )?(?:phone|ringer) (?:on |in )?(?:silent|vibrate|muted|on|off)$|"
+    r"^is do not disturb (?:on|off|enabled)$|"
+    r"^(?:is (?:my |the )?phone|am i) (?:on|in) (?:do not disturb|silent|vibrate)(?: mode)?$")
+_STATUS_ALL = re.compile(r"^(?:my )?(?:phone|device)(?:'s)? status$|"
+                         r"^how(?:'s| is) my phone(?: doing)?$|"
+                         r"^(?:what's|what is) my phone'?s status$")
+
+
+def _parse_status(text: str) -> Optional[Parsed]:
+    about = None
+    if _STATUS_ALL.match(text):
+        about = "all"
+    elif _SOUND.match(text):
+        about = "sound"
+    elif _NETWORK.match(text):
+        about = "network"
+    elif (_BATTERY.search(text) and not _BATTERY_NOT.search(text)
+          and (re.match(_QUESTION, text) or _BATTERY_TAIL.match(text))):
+        about = "battery"
+    return Parsed(PHONE_STATUS, {"about": about}) if about else None
+
+
+# --- phone settings --------------------------------------------------------------
+
+_ON_OFF_THINGS = {TORCH_SET: r"(?:flash ?light|torch)",
+                  DND_SET: r"(?:do not disturb|dnd)(?: mode)?"}
+
+
+def _switched(text: str, thing: str) -> Optional[bool]:
+    """True or False if ``text`` turns ``thing`` on or off, else None."""
+    m = (re.match(rf"^(?:turn|switch|flip|put|set) (?P<a>on|off) (?:the |my )?{thing}$", text)
+         or re.match(rf"^(?:turn|switch|flip|put|set) (?:the |my )?{thing} (?P<a>on|off)$", text)
+         or re.match(rf"^(?:the |my )?{thing} (?P<a>on|off)$", text))
+    if m:
+        return m.group("a") == "on"
+    m = re.match(rf"^(?P<v>enable|activate|start|disable|deactivate|stop|end) "
+                 rf"(?:the |my )?{thing}$", text)
+    if m:
+        return m.group("v") in ("enable", "activate", "start")
+    return None
+
+
+_RINGER_TO = re.compile(r"^(?:put|set|switch|turn) (?:my |the )?(?:phone|ringer) "
+                        r"(?:on|to|into|in) (?P<mode>silent|vibrate|vibration|normal|ring)"
+                        r"(?: mode)?$")
+_RINGER_MODE_SWITCH = re.compile(
+    r"^(?:(?:turn|switch) (?P<a>on|off) (?:the )?(?P<m1>silent|vibrate) mode|"
+    r"(?:turn|switch) (?:the )?(?P<m2>silent|vibrate) mode (?P<b>on|off)|"
+    r"(?P<m3>silent|vibrate) mode(?: (?P<c>on|off))?|"
+    r"(?P<v>enable|disable) (?P<m4>silent|vibrate) mode)$")
+_SILENCE = re.compile(r"^(?:silence|mute) (?:my |the )?(?:phone|ringer)$")
+_UNSILENCE = re.compile(r"^(?:unmute|unsilence) (?:my |the )?(?:phone|ringer)$")
+_RINGER_SWITCH = re.compile(r"^(?:(?:turn|switch) (?P<a>on|off) (?:the |my )?ringer|"
+                            r"(?:turn|switch) (?:the |my )?ringer (?P<b>on|off)|"
+                            r"(?:the |my )?ringer (?P<c>on|off))$")
+
+
+def _parse_ringer(text: str) -> Optional[str]:
+    """The ringer mode ``text`` asks for, or None."""
+    m = _RINGER_TO.match(text)
+    if m:
+        mode = m.group("mode")
+        return {"vibration": "vibrate", "ring": "normal"}.get(mode, mode)
+    m = _RINGER_MODE_SWITCH.match(text)
+    if m:
+        mode = m.group("m1") or m.group("m2") or m.group("m3") or m.group("m4")
+        on = (m.group("a") or m.group("b") or m.group("c") or "on") == "on"
+        if m.group("v"):
+            on = m.group("v") == "enable"
+        return mode if on else "normal"
+    if _SILENCE.match(text):
+        return "silent"
+    if _UNSILENCE.match(text):
+        return "normal"
+    m = _RINGER_SWITCH.match(text)
+    if m:
+        return "normal" if (m.group("a") or m.group("b") or m.group("c")) == "on" else "silent"
+    return None
+
+
+_STREAMS = {"media": "media", "music": "media", "ring": "ring", "ringer": "ring",
+            "ringtone": "ring", "alarm": "alarm", "call": "call", "in call": "call"}
+
+
+def _volume(n: int) -> str:
+    """ "the alarm volume", with the stream in group ``s<n>`` (one per alternative)."""
+    return (rf"(?:the |my )?(?:(?P<s{n}>media|music|ringtone|ringer|ring|alarm|in call|call) )?"
+            r"volume")
+
+
+_VOLUME_STEP = re.compile(
+    rf"^(?:(?:turn|crank|put|bring) {_volume(1)} (?P<d1>up|down)|"
+    rf"(?:turn|crank|bring) (?P<d2>up|down) {_volume(2)}|"
+    rf"{_volume(3)} (?P<d3>up|down)|"
+    rf"(?P<v>raise|increase|lower|decrease|reduce) {_volume(4)})$")
+_VOLUME_TO = re.compile(rf"^(?:(?:set|turn|put|change) {_volume(1)} (?:to|at)|"
+                        rf"{_volume(2)}(?: to)?) (?P<level>.+)$")
+_VOLUME_MUTE = re.compile(rf"^mute {_volume(1)}$")
+
+
+def volume_level(said: str) -> Optional[int]:
+    """A volume in percent from "50 percent", "7" (out of 10), "max", "half", or None."""
+    said = said.strip()
+    if re.fullmatch(r"max(?:imum)?|full|all the way up|100 percent|100 %", said):
+        return 100
+    if re.fullmatch(r"min(?:imum)?|zero|0|off|all the way down|nothing", said):
+        return 0
+    if re.fullmatch(rf"(?:{_HALF}|halfway|half way)", said):
+        return 50
+    m = re.fullmatch(r"(\d{1,3}) ?(?:percent|%)", said)
+    if m:
+        level = int(m.group(1))
+        return level if level <= 100 else None
+    m = re.fullmatch(r"(\d{1,3})(?: out of 10)?", said)
+    if m:
+        level = int(m.group(1))
+        return level * 10 if level <= 10 else (level if level <= 100 else None)
+    return None
+
+
+def _parse_volume(text: str) -> Optional[dict]:
+    """The volume.set params ``text`` asks for, or None."""
+    m = _VOLUME_STEP.match(text) or _VOLUME_MUTE.match(text)
+    if m is None:
+        m = _VOLUME_TO.match(text)
+        if m is None:
+            return None
+        level = volume_level(m.group("level"))
+        if level is None:
+            return None
+        params = {"level": level}
+    elif text.startswith("mute"):
+        params = {"level": 0}
+    else:
+        direction = m.groupdict().get("d1") or m.groupdict().get("d2") or m.groupdict().get("d3")
+        if direction is None:
+            direction = "up" if m.group("v") in ("raise", "increase") else "down"
+        params = {"step": direction}
+    groups = m.groupdict()
+    stream = next((groups[f"s{n}"] for n in range(1, 5) if groups.get(f"s{n}")), "media")
+    params["stream"] = _STREAMS[stream]
+    return params
+
+
+def _parse_settings(text: str) -> Optional[Parsed]:
+    for request, thing in _ON_OFF_THINGS.items():
+        on = _switched(text, thing)
+        if on is not None:
+            return Parsed(request, {"on": on})
+    mode = _parse_ringer(text)
+    if mode is not None:
+        return Parsed(RINGER_SET, {"mode": mode})
+    volume = _parse_volume(text)
+    if volume is not None:
+        return Parsed(VOLUME_SET, volume)
+    return None
+
+
 # --- stopping, dismissing and snoozing -------------------------------------------
 #
 # What Android's Clock can do (SPEC.md "Stopping timers and alarms"): silence ringing
@@ -760,6 +955,9 @@ def parse_utterance(utterance: str, lang: str, now: datetime) -> Optional[Parsed
     stop = _parse_stop(digitize(text), now)
     if stop is not None:
         return stop
+    phone = _parse_status(text) or _parse_settings(digitize(text)) or _parse_navigate(text)
+    if phone is not None:
+        return phone
     # "what time is my alarm set for" asks, it doesn't set.
     asks_only = not re.search(_SET_VERB, _sub(r"\balarms? (?:is |are )?set\b", "alarm", text))
     if _SHOW_ALARMS.search(text) and not _ALARM_NOT.search(text) and asks_only:

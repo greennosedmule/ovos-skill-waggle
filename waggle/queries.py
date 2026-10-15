@@ -12,11 +12,13 @@ from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
 from waggle.messages import (
-    APPS_LIST, CALENDAR_NEXT, CONTACTS_LOOKUP, Query, _drop_none, _require_dict, _str,
-    bad_request, from_wire_time, new_request_id, to_wire_time,
+    APPS_LIST, CALENDAR_NEXT, CONTACTS_LOOKUP, PHONE_STATUS, RINGER_MODES, Query, _drop_none,
+    _require_dict, _str, bad_request, from_wire_time, new_request_id, to_wire_time,
 )
 
 PHONE_TYPES = frozenset({"cell", "home", "work", "other"})
+POWER_SOURCES = ("ac", "usb", "wireless", "other", "none")
+NETWORK_TYPES = ("wifi", "cellular", "none")
 
 
 # --- builders ----------------------------------------------------------------
@@ -39,6 +41,11 @@ def apps_list(name: Optional[str] = None, limit: int = 20, *, id: Optional[str] 
     """Launchable apps, optionally only those whose label matches ``name``."""
     params = _drop_none({"name": name, "limit": limit})
     return _query(APPS_LIST, params, id)
+
+
+def phone_status(*, id: Optional[str] = None) -> Query:
+    """The phone's battery, network and sound settings."""
+    return _query(PHONE_STATUS, {}, id)
 
 
 # --- result models -----------------------------------------------------------
@@ -175,6 +182,65 @@ class App:
         return {"label": self.label, "package": self.package}
 
 
+def _optional(d: dict, key: str, check, what: str):
+    value = d.get(key)
+    if value is not None and not check(value):
+        raise bad_request(f"{key!r} must be {what}, got {value!r}")
+    return value
+
+
+def _is_bool(v: Any) -> bool:
+    return isinstance(v, bool)
+
+
+def _known(d: dict, key: str, values: tuple) -> Optional[str]:
+    """A string field from a fixed set; a value a newer phone adds reads as unknown (None)."""
+    value = d.get(key)
+    if value is not None and not isinstance(value, str):
+        raise bad_request(f"{key!r} must be a string, got {value!r}")
+    return value if value in values else None
+
+
+@dataclass(frozen=True)
+class PhoneStatus:
+    """A ``phone.status`` result. Every part is optional: a phone leaves out what it can't read.
+
+    ``source`` is what the phone is plugged into (``none`` on battery, ``other`` for a
+    dock, say); ``network`` is ``wifi``, ``cellular`` or ``none``. A value outside
+    these sets reads as unknown, except that any other source still means plugged in.
+    """
+    battery_percent: Optional[int] = None
+    charging: Optional[bool] = None
+    source: Optional[str] = None
+    network: Optional[str] = None
+    metered: Optional[bool] = None
+    ringer: Optional[str] = None
+    dnd: Optional[bool] = None
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "PhoneStatus":
+        d = _require_dict(d, "phone.status result")
+        battery = _require_dict(d.get("battery") or {}, "'battery'")
+        network = _require_dict(d.get("network") or {}, "'network'")
+        percent = _optional(battery, "percent", lambda v: isinstance(v, int)
+                            and not isinstance(v, bool) and 0 <= v <= 100, "an integer 0–100")
+        source = _optional(battery, "source", lambda v: isinstance(v, str), "a string")
+        return cls(battery_percent=percent,
+                   charging=_optional(battery, "charging", _is_bool, "a boolean"),
+                   source=source if source in POWER_SOURCES or source is None else "other",
+                   network=_known(network, "type", NETWORK_TYPES),
+                   metered=_optional(network, "metered", _is_bool, "a boolean"),
+                   ringer=_known(d, "ringer", RINGER_MODES),
+                   dnd=_optional(d, "dnd", _is_bool, "a boolean"))
+
+    def to_dict(self) -> dict:
+        battery = _drop_none({"percent": self.battery_percent, "charging": self.charging,
+                              "source": self.source})
+        network = _drop_none({"type": self.network, "metered": self.metered})
+        return _drop_none({"battery": battery or None, "network": network or None,
+                           "ringer": self.ringer, "dnd": self.dnd})
+
+
 # --- response data -----------------------------------------------------------
 
 def parse_calendar_next(data: Any) -> list[CalendarEvent]:
@@ -187,6 +253,10 @@ def parse_contacts(data: Any) -> list[Contact]:
 
 def parse_apps(data: Any) -> list[App]:
     return [App.from_dict(a) for a in _list(data, "apps")]
+
+
+def parse_phone_status(data: Any) -> PhoneStatus:
+    return PhoneStatus.from_dict(data)
 
 
 def calendar_data(events: Iterable[CalendarEvent]) -> dict:

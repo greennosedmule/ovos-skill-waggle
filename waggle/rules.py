@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Iterable, Optional
 
-from waggle.messages import Capabilities, Intent, Mode, Rule
+from waggle.messages import Capabilities, Command, Intent, Mode, Rule
 
 
 @dataclass(frozen=True)
@@ -44,17 +44,30 @@ def decide_for(capabilities: Capabilities, intent: Intent) -> Decision:
     return decide(capabilities.rules, intent, capabilities.unmatched)
 
 
+def decide_command(capabilities: Capabilities, command: Command) -> Decision:
+    """The phone's decision on a command: blocked unless it announced the command, and
+    then its rules, judging the command's stand-in intent."""
+    if command.name not in capabilities.commands:
+        return Decision(Mode.BLOCK)
+    return decide_for(capabilities, command.as_intent())
+
+
 def query_enabled(capabilities: Capabilities, name: str) -> bool:
     return name in capabilities.queries
 
 
 def limited(capabilities: Capabilities, *, can_ask: bool = True,
-            actions: bool = True) -> Capabilities:
+            actions: bool = True, off: Iterable[str] = ()) -> Capabilities:
     """``capabilities`` as they apply to one utterance (WAGGLE.md "Common rules").
 
     Without ``actions`` every rule blocks and no query is enabled; without
-    ``can_ask`` an "ask" blocks, since the phone can't ask its user now.
+    ``can_ask`` an "ask" blocks, since the phone can't ask its user now. The
+    queries and commands named in ``off`` aren't available for this utterance.
     """
+    off = frozenset(off)
+    if off & (capabilities.queries | capabilities.commands):
+        capabilities = replace(capabilities, queries=capabilities.queries - off,
+                               commands=capabilities.commands - off)
     if not actions:
         return replace(capabilities, unmatched=Mode.BLOCK, queries=frozenset(),
                        rules=tuple(replace(r, mode=Mode.BLOCK) for r in capabilities.rules))

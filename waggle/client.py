@@ -1,6 +1,6 @@
 """The hub side of Waggle's request/response (see WAGGLE.md "Common rules").
 
-:class:`WaggleClient` sends a ``waggle.intent`` or ``waggle.query`` as a reply
+:class:`WaggleClient` sends a ``waggle.intent``, ``waggle.query`` or ``waggle.command`` as a reply
 to the message that triggered it, so HiveMind routes it to the right peer, and
 waits for the response carrying the same ``id``. It works on any bus with
 ``on``, ``remove`` and ``emit``: ``FakeBus`` or a real ``MessageBusClient``.
@@ -14,7 +14,7 @@ from ovos_bus_client.message import Message
 from ovos_utils.log import LOG
 
 from waggle.messages import (
-    INTENT, QUERY, RESPONSE_TYPES, Intent, Query, Response, new_request_id,
+    COMMAND, INTENT, QUERY, RESPONSE_TYPES, Command, Intent, Query, Response, new_request_id,
 )
 
 
@@ -38,6 +38,11 @@ class WaggleClient:
                    timeout_s: float) -> Optional[Response]:
         """Send ``waggle.query``; the response, or None if none came in time."""
         return self._request(origin, QUERY, query.to_dict(), query.id, timeout_s)
+
+    def send_command(self, origin: Optional[Message], command: Command,
+                     timeout_s: float) -> Optional[Response]:
+        """Send ``waggle.command``; the response, or None if none came in time."""
+        return self._request(origin, COMMAND, command.to_dict(), command.id, timeout_s)
 
     def send_raw(self, origin: Optional[Message], msg_type: str, data: dict,
                  timeout_s: float) -> Optional[Response]:

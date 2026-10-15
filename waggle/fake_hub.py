@@ -14,7 +14,7 @@ A script is a JSON list of steps::
       "expect": {"ok": false, "error": "bad_request"}},
      {"name": "dial", "intent": {...}, "ask": true, "prompt": "Tap Allow or Deny"}]
 
-Each step has exactly one of ``intent`` or ``query``: the request's ``data``,
+Each step has exactly one of ``intent``, ``query`` or ``command``: the request's ``data``,
 sent as-is apart from an ``id`` added if missing, so malformed requests can be
 scripted. Optional keys: ``expect`` (``ok`` and/or ``error``; without it the
 outcome is only reported), ``timeout_s`` (default 5, or the phone's
@@ -39,7 +39,7 @@ from ovos_utils.log import LOG
 
 from waggle.client import WaggleClient
 from waggle.messages import (
-    CAPABILITIES, INTENT, QUERY, Capabilities, ErrorCode, Response, WaggleError,
+    CAPABILITIES, COMMAND, INTENT, QUERY, Capabilities, ErrorCode, Response, WaggleError,
     new_request_id,
 )
 
@@ -62,6 +62,17 @@ _RETURN_TO_PHONE = "If another app opened on the phone, switch back to Wiggins n
 DEFAULT_SCRIPT: list[dict] = [
     {"name": "unknown query", "query": {"name": "sms.read", "params": {}},
      "expect": {"ok": False, "error": "bad_request"}},
+    {"name": "unknown command", "command": {"name": "waggle.self.destruct", "params": {}},
+     "expect": {"ok": False, "error": "bad_request"}},
+    {"name": "intent named like a command",
+     "intent": {"action": "waggle.torch.set", "description": "Waggle test: command as intent"},
+     "expect": {"ok": False, "error": "bad_request"}},
+    {"name": "phone status", "query": {"name": "phone.status", "params": {}}},
+    {"name": "flashlight on", "command": {"name": "waggle.torch.set", "params": {"on": True},
+                                          "description": "Waggle test: flashlight on"}},
+    {"name": "flashlight off", "pause_s": 1,
+     "command": {"name": "waggle.torch.set", "params": {"on": False},
+                 "description": "Waggle test: flashlight off"}},
     {"name": "forbidden content: URI",
      "intent": {"action": _ACTION + "VIEW", "data": "content://contacts/people/1",
                 "description": "Waggle test: forbidden URI scheme"},
@@ -158,7 +169,7 @@ class PhoneInfo:
 @dataclass(frozen=True)
 class Step:
     name: str
-    kind: str  # INTENT or QUERY
+    kind: str  # INTENT, QUERY or COMMAND
     data: dict
     expect: dict = field(default_factory=dict)
     timeout_s: Optional[float] = None
@@ -173,9 +184,10 @@ class Step:
         if not isinstance(d, dict):
             raise ValueError(f"{where} must be an object")
         name = d.get("name", where)
-        kinds = [k for k in ("intent", "query") if k in d]
+        kinds = [k for k in ("intent", "query", "command") if k in d]
         if len(kinds) != 1:
-            raise ValueError(f"{where} ({name}) needs exactly one of 'intent' or 'query'")
+            raise ValueError(f"{where} ({name}) needs exactly one of 'intent', 'query' or "
+                             "'command'")
         data = d[kinds[0]]
         if not isinstance(data, dict):
             raise ValueError(f"{where} ({name}): '{kinds[0]}' must be an object")
@@ -194,7 +206,8 @@ class Step:
         prompt = d.get("prompt")
         if prompt is not None and not isinstance(prompt, str):
             raise ValueError(f"{where} ({name}): 'prompt' must be a string")
-        return cls(name=str(name), kind=INTENT if kinds[0] == "intent" else QUERY,
+        kind = {"intent": INTENT, "query": QUERY, "command": COMMAND}[kinds[0]]
+        return cls(name=str(name), kind=kind,
                    data=dict(data), expect=dict(expect), timeout_s=d.get("timeout_s"),
                    ask=bool(d.get("ask", False)), pause_s=d.get("pause_s") or 0.0, prompt=prompt)
 
@@ -350,10 +363,11 @@ class FakeHub:
 
 def summarize_request(kind: str, data: dict) -> str:
     """A one-line summary of a request's data, e.g. ``intent SET_ALARM extras[HOUR,MINUTES]``."""
-    if kind == QUERY:
+    if kind in (QUERY, COMMAND):
         name = data.get("name")
         params = data.get("params")
-        return f"query {name}" + (f" {json.dumps(params, sort_keys=True)}" if params else "")
+        word = "query" if kind == QUERY else "command"
+        return f"{word} {name}" + (f" {json.dumps(params, sort_keys=True)}" if params else "")
     action = data.get("action")
     parts = ["intent", action.rsplit(".", 1)[-1] if isinstance(action, str) else repr(action)]
     if data.get("data") is not None:

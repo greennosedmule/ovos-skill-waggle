@@ -30,23 +30,23 @@ from ovos_utils.log import LOG
 
 from waggle import intents, queries
 from waggle.client import WaggleClient
-from waggle.messages import ErrorCode, Intent, Mode, Query, Response, WaggleError
-from waggle.queries import App, Contact
-from waggle.rules import decide_for
+from waggle.messages import Command, ErrorCode, Intent, Mode, Query, Response, WaggleError
+from waggle.queries import App, Contact, PhoneStatus
+from waggle.rules import Decision, decide_command, decide_for
 
 from ovos_skill_waggle import agenda
 from ovos_skill_waggle.actions import (
-    INTENT_BUILDERS, SUPPORTED_REQUESTS, build_intent, phone_allows, precheck_intent,
-    required_query, spoken_number, timers_stop_intents,
+    COMMAND_BUILDERS, INTENT_BUILDERS, SUPPORTED_REQUESTS, build_command, build_intent,
+    phone_allows, precheck_intent, required_query, spoken_number, timers_stop_intents,
 )
 from ovos_skill_waggle.capabilities import (
-    PHONE_ACTIONS, CapabilityCache, Phone, as_heard, peer_of,
+    CAN_ASK, PHONE_ACTIONS, CapabilityCache, Phone, as_heard, peer_of,
 )
 from ovos_skill_waggle.parsing import PHONE_TYPE_SYNONYMS, answer_yes, choose
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    MESSAGE_COMPOSE, TIMER_SET, TIMERS_STOP, UNREACHABLE, RequestResponse, WaggleRequest,
-    response_message,
+    DND_SET, MESSAGE_COMPOSE, NAVIGATE_TO, PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP,
+    TORCH_SET, UNREACHABLE, VOLUME_SET, RequestResponse, WaggleRequest, response_message,
 )
 from ovos_skill_waggle.settings import Settings
 
@@ -57,7 +57,7 @@ HUB_DESTINATION = "skills"
 # (WAGGLE.md "Common rules").
 WATCHING = "user_watching"
 # Requests whose result the phone shows: not confirmed aloud to a user who's watching.
-ON_SCREEN = frozenset({ALARMS_SHOW, APP_OPEN, CONTACT_CALL, MESSAGE_COMPOSE})
+ON_SCREEN = frozenset({ALARMS_SHOW, APP_OPEN, CONTACT_CALL, MESSAGE_COMPOSE, NAVIGATE_TO})
 
 # Phone error code -> dialog. Codes a newer phone adds fall back to "phone_error".
 ERROR_DIALOGS = {
@@ -74,7 +74,7 @@ ERROR_DIALOGS = {
 
 # What each query reads, for "Your phone doesn't share … with the hub".
 QUERY_SUBJECTS = {"calendar.next": "your calendar", "contacts.lookup": "your contacts",
-                  "apps.list": "its list of apps"}
+                  "apps.list": "its list of apps", "phone.status": "its status"}
 
 # The most matches read out in a "which one?" question; more is too many to hear.
 MAX_CHOICES = 4
@@ -113,9 +113,12 @@ def phone_origin(message: Message, peer: str) -> Message:
 
 def why_not_now(origin: Message) -> Outcome:
     """Why a request the phone's rules allow is refused for this utterance."""
-    if (origin.context or {}).get(PHONE_ACTIONS) is False:
+    context = origin.context or {}
+    if context.get(PHONE_ACTIONS) is False:
         return Outcome.failure(ErrorCode.BLOCKED.value, "phone_actions_off")
-    return Outcome.failure(ErrorCode.CANNOT_ASK.value, "cannot_ask")
+    if context.get(CAN_ASK) is False:
+        return Outcome.failure(ErrorCode.CANNOT_ASK.value, "cannot_ask")
+    return Outcome.failure(ErrorCode.BLOCKED.value, "off_here")  # waggle_off names it
 
 
 def watching(message: Message) -> bool:
@@ -210,6 +213,27 @@ def success_outcome(request: WaggleRequest) -> Outcome:
         return Outcome(f"alarm_dismissed_{mode}")
     if request.request == ALARM_SNOOZE:
         return Outcome("alarm_snoozed")
+    if request.request == NAVIGATE_TO:
+        return Outcome("navigating", {"destination": p["destination"]})
+    return Outcome("done")
+
+
+def command_outcome(request: WaggleRequest, data: Optional[dict]) -> Outcome:
+    """The confirmation for a settings request; ``data`` is the phone's answer's data."""
+    p = request.params
+    if request.request == TORCH_SET:
+        return Outcome("torch_on" if p["on"] else "torch_off")
+    if request.request == DND_SET:
+        return Outcome("dnd_on" if p["on"] else "dnd_off")
+    if request.request == RINGER_SET:
+        return Outcome(f"ringer_{p['mode']}")
+    if request.request == VOLUME_SET:
+        level = (data or {}).get("level")
+        if isinstance(level, int) and not isinstance(level, bool) and 0 <= level <= 100:
+            return Outcome("volume_level", {"stream": p["stream"], "level": level})
+        if "level" in p:
+            return Outcome("volume_level", {"stream": p["stream"], "level": p["level"]})
+        return Outcome(f"volume_{p['step']}", {"stream": p["stream"]})
     return Outcome("done")
 
 
@@ -228,6 +252,30 @@ def failure_outcome(response: Optional[Response]) -> Outcome:
 def response_outcome(success: Outcome, response: Optional[Response]) -> Outcome:
     """``success`` if the phone ran the intent, else the failure it reported."""
     return success if response is not None and response.ok else failure_outcome(response)
+
+
+def status_parts(status: PhoneStatus, about: str) -> list[tuple[str, dict]]:
+    """The dialogs that answer a ``phone.status`` request about ``about``, in order.
+
+    A part the phone left out is skipped.
+    """
+    parts: list[tuple[str, dict]] = []
+    if about in ("battery", "all") and status.battery_percent is not None:
+        if status.charging:
+            dialog = "status_battery_charging"
+        elif status.source not in (None, "none"):
+            dialog = "status_battery_plugged"  # plugged in but not charging: full, say
+        else:
+            dialog = "status_battery"
+        parts.append((dialog, {"percent": status.battery_percent}))
+    if about in ("network", "all") and status.network is not None:
+        parts.append((f"status_{status.network}", {}))
+    if about in ("sound", "all"):
+        if status.ringer is not None:
+            parts.append((f"status_ringer_{status.ringer}", {}))
+        if status.dnd is not None:
+            parts.append(("status_dnd_on" if status.dnd else "status_dnd_off", {}))
+    return parts
 
 
 class _Stop(Exception):
@@ -314,7 +362,7 @@ class RequestHandlers:
                 return Outcome.failure(ErrorCode.UNSUPPORTED_VERSION.value, "unsupported_version")
             return Outcome.failure(UNREACHABLE, "not_connected")
 
-        heard = as_heard(phone, origin)
+        heard = as_heard(phone, origin)  # its rules as they apply to this utterance
         try:
             outcome = self._run_on(request, origin, heard, settings)
         except _Stop as stop:
@@ -332,9 +380,11 @@ class RequestHandlers:
         if request.request in INTENT_BUILDERS:
             return self._launch(origin, request, phone, settings, build_intent(request, settings),
                                 success_outcome(request))
+        if request.request in COMMAND_BUILDERS:
+            return self._command(origin, request, phone, settings, build_command(request))
         run = {CALENDAR_NEXT: self._calendar_next, APP_OPEN: self._app_open,
                CONTACT_CALL: self._contact_call, MESSAGE_COMPOSE: self._message_compose,
-               TIMERS_STOP: self._timers_stop}[request.request]
+               TIMERS_STOP: self._timers_stop, PHONE_STATUS: self._phone_status}[request.request]
         return run(request, origin, phone, settings)
 
     def _precheck(self, request: WaggleRequest, phone: Phone, settings: Settings) -> None:
@@ -350,6 +400,9 @@ class RequestHandlers:
             raise _Stop(Outcome.failure(ErrorCode.BAD_REQUEST.value, "error"))
         if intent is not None and not decide_for(phone.capabilities, intent).allowed:
             raise _Stop(Outcome.failure(ErrorCode.BLOCKED.value, "blocked"))
+        if (request.request in COMMAND_BUILDERS
+                and not decide_command(phone.capabilities, build_command(request)).allowed):
+            raise _Stop(Outcome.failure(ErrorCode.BLOCKED.value, "blocked"))
 
     def _launch(self, origin: Message, request: WaggleRequest, phone: Phone, settings: Settings,
                 intent: Intent, success: Outcome,
@@ -358,13 +411,7 @@ class RequestHandlers:
         decision = decide_for(phone.capabilities, intent)
         if not decision.allowed:
             return Outcome.failure(ErrorCode.BLOCKED.value, "blocked")
-        timeout_s = self._timeout(decision.mode, phone, settings)
-        # A user who's watching sees the phone ask; a warning is still said.
-        quiet = confirm_dialog == "confirm_on_phone" and watching(origin)
-        if decision.mode is Mode.ASK and not quiet:
-            # Said even when the caller speaks the outcome itself (the persona): the user
-            # has to act now, and the outcome only comes once they have.
-            self._say(origin, confirm_dialog, {})
+        timeout_s = self._before_sending(origin, decision, phone, settings, confirm_dialog)
         LOG.info(f"Waggle: {request.request} -> {phone.peer} ({intent.action}, "
                  f"{decision.mode.value}, waiting {timeout_s}s)")
         if intent.action in CLOCK_ACTIONS:
@@ -374,6 +421,31 @@ class RequestHandlers:
             with self._clock_lock:
                 self._clock_answered[phone.client_id] = time.monotonic()
         return response_outcome(success, response)
+
+    def _before_sending(self, origin: Message, decision: Decision, phone: Phone,
+                        settings: Settings, confirm_dialog: str = "confirm_on_phone") -> float:
+        """Tell the user to confirm on the phone if it will ask; how long to wait for it."""
+        # A user who's watching sees the phone ask; a warning is still said.
+        quiet = confirm_dialog == "confirm_on_phone" and watching(origin)
+        if decision.mode is Mode.ASK and not quiet:
+            # Said even when the caller speaks the outcome itself (the persona): the user
+            # has to act now, and the outcome only comes once they have.
+            self._say(origin, confirm_dialog, {})
+        return self._timeout(decision.mode, phone, settings)
+
+    def _command(self, origin: Message, request: WaggleRequest, phone: Phone,
+                 settings: Settings, command: Command) -> Outcome:
+        """Send ``command`` and wait for the phone; the confirmation if it ran."""
+        decision = decide_command(phone.capabilities, command)
+        if not decision.allowed:
+            return Outcome.failure(ErrorCode.BLOCKED.value, "blocked")
+        timeout_s = self._before_sending(origin, decision, phone, settings)
+        LOG.info(f"Waggle: {request.request} -> {phone.peer} ({command.name}, "
+                 f"{decision.mode.value}, waiting {timeout_s}s)")
+        response = self.client.send_command(origin, command, timeout_s)
+        if response is None or not response.ok:
+            return failure_outcome(response)
+        return command_outcome(request, response.data)
 
     def _wait_for_clock(self, phone: Phone) -> None:
         """Hold a Clock intent until ``clock_gap_s`` after the phone's last one was answered:
@@ -471,6 +543,23 @@ class RequestHandlers:
         return Outcome("calendar_list", {
             "count": len(events),
             "events": agenda.spoken_list([agenda.spoken_event(e, now, tz) for e in events])})
+
+    # --- phone.status ------------------------------------------------------------
+
+    def _phone_status(self, request: WaggleRequest, origin: Message, phone: Phone,
+                      settings: Settings) -> Outcome:
+        """What the user asked about: the battery, the network, the ringer and DND, or all."""
+        data = self._query(origin, phone, settings, queries.phone_status())
+        try:
+            status = queries.parse_phone_status(data)
+        except WaggleError as e:
+            LOG.warning(f"Waggle: bad phone.status result from {phone.peer}: {e.message}")
+            return Outcome.failure(ErrorCode.BAD_REQUEST.value, "phone_error")
+        about = request.params.get("about", "all")
+        parts = [self.render(dialog, data) for dialog, data in status_parts(status, about)]
+        if not parts:
+            return Outcome("status_unknown")
+        return Outcome("status", {"text": " ".join(parts)})
 
     # --- alarm.dismiss, all ----------------------------------------------------
 

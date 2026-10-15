@@ -6,8 +6,10 @@ hostnames, IPs and private repo names out of code, docs and commit messages. Say
 
 ## Which docs are authoritative
 
-- **WAGGLE.md** is the wire protocol between the hub and a phone. It's **frozen
-  as v1**: adding optional fields, queries, extra types or error codes keeps v1.
+- **WAGGLE.md** is the wire protocol between the hub and a phone: intents (Android
+  activities), queries (reads) and commands (settings the phone changes itself).
+  It's **frozen as v1**: adding optional fields, queries, commands, extra types or
+  error codes keeps v1.
   Removing anything or changing what it means needs a new version number, and
   the phone client (Wiggins) has to change too. Its "Versioning" section has the
   rules.
@@ -24,14 +26,14 @@ hostnames, IPs and private repo names out of code, docs and commit messages. Say
 
 | Path | What it is |
 |---|---|
-| `waggle/` | The protocol library: message models and validation (`messages.py`), the rule matcher (`rules.py`), intent and query builders, a request/response client, `fake_phone.py` and `fake_hub.py` (the `waggle-fake-hub` CLI for testing phones). It must not import `ovos_skill_waggle`, so it can become its own package later. |
+| `waggle/` | The protocol library: message models and validation (`messages.py`), the rule matcher (`rules.py`), intent, query and command builders, a request/response client, `fake_phone.py` and `fake_hub.py` (the `waggle-fake-hub` CLI for testing phones). It must not import `ovos_skill_waggle`, so it can become its own package later. |
 | `ovos_skill_waggle/pipeline.py` | `WagglePipeline`, both an OPM pipeline plugin (`ovos-waggle-pipeline-plugin`, only `-high` matches) and an `OVOSAbstractApplication`. It matches utterances from phones that announced capabilities, asks follow-up questions with `get_response`, and keeps a registry of running plugins (`find_phone`) for the tools. |
 | `ovos_skill_waggle/parsing.py` | All language parsing: domain gates, durations and clock times, names, stopping and dismissing (`_parse_stop`), answers to follow-ups. Only the stage parses language. |
-| `ovos_skill_waggle/handlers.py` | `RequestHandlers` run a `waggle:request`: re-check the phone's rules, run lookups, send the intent, wait, and report through `waggle:request.response`. They never see an utterance. |
+| `ovos_skill_waggle/handlers.py` | `RequestHandlers` run a `waggle:request`: re-check the phone's rules, run lookups, send the intent or command, wait, and report through `waggle:request.response`. They never see an utterance. |
 | `ovos_skill_waggle/requests.py`, `actions.py` | Request shapes and param validation, and what each request needs from the phone (`phone_allows`, the pre-check intents). |
 | `ovos_skill_waggle/tools.py` | `WaggleToolBox` (`opm.agents.toolbox` entry point `ovos-waggle-tools`): one tool per request for ovos-agentic-loop's `ovos-native-toolcall-loop`. |
 | `ovos_skill_waggle/said.py` | Each session's `recognizer_loop:utterance` as the phone sent it, so text messages keep the punctuation ovos-core's normalizer strips. The stage re-parses a `message.compose` match from that wording (`as_said`), and follow-up answers come back through it too. A hub's `raw_utterances` in the message's context (`in_context`) wins over the recording and needs no wait; the recording is the stock-hub fallback. |
-| `ovos_skill_waggle/capabilities.py` | The capability cache, keyed by HiveMind client id and kept in a JSON file. `as_heard` limits a phone's rules to one utterance by its `can_ask` and `phone_actions` flags; the stage, the tool list and the handlers all judge by that. |
+| `ovos_skill_waggle/capabilities.py` | The capability cache, keyed by HiveMind client id and kept in a JSON file. `as_heard` limits a phone's rules to one utterance by its `can_ask`, `phone_actions` and `waggle_off` context keys; the stage, the tool list and the handlers all judge by that. |
 | `ovos_skill_waggle/apps.py`, `agenda.py`, `settings.py` | The app-label catalog used for matching "open X", spoken calendar text, and plugin settings. |
 | `ovos_skill_waggle/locale/en-us/` | Dialogs and `.voc` files, English only. They ship through `package-data` in pyproject.toml. |
 

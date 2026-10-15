@@ -21,9 +21,12 @@ INTENT = "waggle.intent"
 INTENT_RESPONSE = "waggle.intent.response"
 QUERY = "waggle.query"
 QUERY_RESPONSE = "waggle.query.response"
+COMMAND = "waggle.command"
+COMMAND_RESPONSE = "waggle.command.response"
 
-MESSAGE_TYPES = frozenset({CAPABILITIES, INTENT, INTENT_RESPONSE, QUERY, QUERY_RESPONSE})
-RESPONSE_TYPES = {INTENT: INTENT_RESPONSE, QUERY: QUERY_RESPONSE}
+MESSAGE_TYPES = frozenset({CAPABILITIES, INTENT, INTENT_RESPONSE, QUERY, QUERY_RESPONSE,
+                           COMMAND, COMMAND_RESPONSE})
+RESPONSE_TYPES = {INTENT: INTENT_RESPONSE, QUERY: QUERY_RESPONSE, COMMAND: COMMAND_RESPONSE}
 
 
 class ErrorCode(str, Enum):
@@ -57,7 +60,20 @@ FORBIDDEN_SCHEMES = frozenset({"content", "file", "intent", "android-app"})
 CALENDAR_NEXT = "calendar.next"
 CONTACTS_LOOKUP = "contacts.lookup"
 APPS_LIST = "apps.list"
-QUERY_NAMES = frozenset({CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST})
+PHONE_STATUS = "phone.status"
+QUERY_NAMES = frozenset({CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS})
+
+# Commands (WAGGLE.md "waggle.command"). Their names share the rules' action namespace with
+# Android's intent actions, so they all start with COMMAND_PREFIX, which no intent may use.
+COMMAND_PREFIX = "waggle."
+TORCH_SET = "waggle.torch.set"
+VOLUME_SET = "waggle.volume.set"
+RINGER_SET = "waggle.ringer.set"
+DND_SET = "waggle.dnd.set"
+COMMAND_NAMES = frozenset({TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET})
+VOLUME_STREAMS = ("media", "ring", "alarm", "call")
+VOLUME_STEPS = ("up", "down")
+RINGER_MODES = ("normal", "vibrate", "silent")
 
 INT_MIN, INT_MAX = -2**31, 2**31 - 1
 LONG_MIN, LONG_MAX = -2**63, 2**63 - 1
@@ -207,6 +223,7 @@ class Capabilities:
     lang: Optional[str] = None
     ask_timeout_s: Optional[float] = None
     client: Optional[ClientInfo] = None
+    commands: frozenset[str] = frozenset()
 
     @classmethod
     def from_dict(cls, d: Any) -> "Capabilities":
@@ -226,6 +243,9 @@ class Capabilities:
             raise bad_request("'rules' must be a list")
         if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
             raise bad_request("'queries' must be a list of strings")
+        commands = d.get("commands", [])
+        if not isinstance(commands, list) or not all(isinstance(c, str) for c in commands):
+            raise bad_request("'commands' must be a list of strings")
         ask_timeout = d.get("ask_timeout_s")
         if ask_timeout is not None and (isinstance(ask_timeout, bool)
                                         or not isinstance(ask_timeout, (int, float)) or ask_timeout < 0):
@@ -239,7 +259,7 @@ class Capabilities:
         return cls(version=version, rules=tuple(Rule.from_dict(r) for r in rules),
                    queries=frozenset(queries), unmatched=Mode(unmatched),
                    timezone=_str(d, "timezone"), lang=_str(d, "lang"),
-                   ask_timeout_s=ask_timeout, client=client)
+                   ask_timeout_s=ask_timeout, client=client, commands=frozenset(commands))
 
     def to_dict(self) -> dict:
         return _drop_none({
@@ -252,6 +272,8 @@ class Capabilities:
             "unmatched": self.unmatched.value,
             "rules": [r.to_dict() for r in self.rules],
             "queries": sorted(self.queries),
+            # Left out when empty, so an older phone's announcement reads back as it was sent.
+            "commands": sorted(self.commands) or None,
         })
 
 
@@ -393,11 +415,94 @@ class Query:
         return {"id": self.id, "name": self.name, "params": dict(self.params)}
 
 
+# --- commands ----------------------------------------------------------------
+
+def is_command_action(action: Any) -> bool:
+    """Whether an action names a command; a phone answers ``bad_request`` to such an intent."""
+    return isinstance(action, str) and action.startswith(COMMAND_PREFIX)
+
+
+def _bool_param(params: dict, key: str) -> bool:
+    value = params.get(key)
+    if not isinstance(value, bool):
+        raise bad_request(f"param {key!r} must be a boolean, got {value!r}")
+    return value
+
+
+def _choice_param(params: dict, key: str, choices: tuple, default: Optional[str] = None) -> str:
+    value = params.get(key, default)
+    if value not in choices:
+        raise bad_request(f"param {key!r} must be one of {', '.join(choices)}, got {value!r}")
+    return value
+
+
+def _validate_command(name: str, params: dict) -> None:
+    if name in (TORCH_SET, DND_SET):
+        _bool_param(params, "on")
+    elif name == RINGER_SET:
+        _choice_param(params, "mode", RINGER_MODES)
+    elif name == VOLUME_SET:
+        _choice_param(params, "stream", VOLUME_STREAMS, "media")
+        if ("level" in params) == ("step" in params):
+            raise bad_request("waggle.volume.set needs exactly one of 'level' and 'step'")
+        if "level" in params:
+            _int_param(params, "level", 0, 0, 100)
+        else:
+            _choice_param(params, "step", VOLUME_STEPS)
+
+
+@dataclass(frozen=True)
+class Command:
+    """The data of a ``waggle.command`` request: something the phone does itself.
+
+    The phone's rules judge it as the intent :meth:`as_intent` gives (WAGGLE.md
+    "Rule matching"), so a command needs no matcher of its own.
+    """
+    id: str
+    name: str
+    params: dict = field(default_factory=dict)
+    description: Optional[str] = None
+
+    def __post_init__(self):
+        if not isinstance(self.id, str) or not self.id:
+            raise bad_request("'id' must be a non-empty string")
+        if self.name not in COMMAND_NAMES:
+            raise bad_request(f"unknown command {self.name!r}")
+        _validate_command(self.name, _require_dict(self.params, "'params'"))
+
+    @property
+    def variant(self) -> Optional[str]:
+        """What a rule's ``category`` can single out: the ringer mode, or DND ``on``/``off``."""
+        if self.name == RINGER_SET:
+            return self.params["mode"]
+        if self.name == DND_SET:
+            return "on" if self.params["on"] else "off"
+        return None
+
+    def as_intent(self) -> Intent:
+        """The stand-in the rules judge: the command's name as the action, its variant as
+        the category. None of these commands has a target app, so there's no package."""
+        return Intent(id=self.id, action=self.name,
+                      categories=(self.variant,) if self.variant else ())
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Command":
+        d = _require_dict(d, "command")
+        return cls(id=_str(d, "id", required=True), name=_str(d, "name", required=True),
+                   params={} if d.get("params") is None else d["params"],
+                   description=_str(d, "description"))
+
+    def to_dict(self) -> dict:
+        return _drop_none({"id": self.id, "name": self.name, "params": dict(self.params),
+                           "description": self.description})
+
+
 # --- responses ---------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Response:
-    """The data of a ``waggle.intent.response`` or ``waggle.query.response``."""
+    """The data of a ``waggle.intent.response``, ``waggle.query.response`` or
+    ``waggle.command.response``."""
     id: str
     ok: bool
     error: Optional[ErrorCode] = None

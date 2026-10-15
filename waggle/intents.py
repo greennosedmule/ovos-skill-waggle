@@ -17,6 +17,7 @@ from waggle.messages import Extra, Intent, new_request_id
 ACTION_MAIN = "android.intent.action.MAIN"
 ACTION_DIAL = "android.intent.action.DIAL"
 ACTION_SENDTO = "android.intent.action.SENDTO"
+ACTION_VIEW = "android.intent.action.VIEW"
 CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER"
 
 # android.provider.AlarmClock
@@ -44,6 +45,7 @@ EXTRA_SMS_BODY = "sms_body"
 
 SCHEME_TEL = "tel"
 SCHEME_SMSTO = "smsto"
+SCHEME_GEO = "geo"
 
 TIMER_MIN_S, TIMER_MAX_S = 1, 86400  # AlarmClock.EXTRA_LENGTH's range
 
@@ -225,3 +227,14 @@ def compose_sms(number: str, body: str, *, name: Optional[str] = None,
     who = _optional_text(name, "name") or number.strip()
     return _intent(ACTION_SENDTO, f"Text {who}", id, package, data=uri,
                    extras={EXTRA_SMS_BODY: Extra("string", body)})
+
+
+def navigate(destination: str, *, package: Optional[str] = None,
+             id: Optional[str] = None) -> Intent:
+    """``VIEW`` with a ``geo:0,0?q=`` search for ``destination``, which every maps app reads.
+
+    It shows the place; the user starts the route in the maps app.
+    """
+    destination = _text(destination, "destination").strip()
+    return _intent(ACTION_VIEW, f"Directions to {destination}", id, package,
+                   data=f"{SCHEME_GEO}:0,0?q={quote(destination, safe='')}")

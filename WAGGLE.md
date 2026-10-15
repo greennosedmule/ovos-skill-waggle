@@ -4,7 +4,7 @@ Oct 4, 2026 · @greennosedmule · **Frozen as v1** on Oct 6, 2026: changes follo
 
 ## Purpose and scope
 
-Waggle lets an OVOS hub ask a phone to do things (launch an Android intent) and to read things (a fixed set of named queries). The phone decides what it allows; the hub only asks. The name comes from the honeybee waggle dance.
+Waggle lets an OVOS hub ask a phone to do things (launch an Android intent, or run one of a fixed set of named commands the phone carries out itself) and to read things (a fixed set of named queries). The phone decides what it allows; the hub only asks. The name comes from the honeybee waggle dance.
 
 Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like any other bus message between the hub and one satellite. This document is the canonical definition. The reference implementations are the `waggle` Python library and skill in this repository, and the Wiggins Android client.
 
@@ -20,15 +20,18 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 | `waggle.intent.response` | phone → hub | Result of a `waggle.intent` |
 | `waggle.query` | hub → phone | Run a named read |
 | `waggle.query.response` | phone → hub | Result of a `waggle.query` |
+| `waggle.command` | hub → phone | Run a named command |
+| `waggle.command.response` | phone → hub | Result of a `waggle.command` |
 
 ## Common rules
 
-- **Request IDs:** each `waggle.intent` and `waggle.query` carries an `id`, a string the hub generates (a UUID4 is recommended). The response echoes it. The phone answers every request exactly once.
+- **Request IDs:** each `waggle.intent`, `waggle.query` and `waggle.command` carries an `id`, a string the hub generates (a UUID4 is recommended). The response echoes it. The phone answers every request exactly once.
 - **Responses:** `{"id": ..., "ok": true|false, "error"?: <code>, "message"?: <text>, "data"?: {...}}`. `error` is set if and only if `ok` is false. `message` is human-readable detail for logs; never speak it as is.
 - **Time:** all timestamps on the wire are ISO 8601 in UTC with a `Z` suffix, e.g. `2026-10-04T21:00:00Z`. All-day dates are plain `YYYY-MM-DD` and carry no timezone. The one exception is Android extras that are wall-clock values by definition (alarm `HOUR` and `MINUTES`). The hub computes those in the phone's timezone, taken from `waggle.capabilities`.
-- **Unknown fields** are ignored by both sides. Unknown message types, query names or extra types get `bad_request`.
+- **Unknown fields** are ignored by both sides. Unknown message types, query names, command names or extra types get `bad_request`.
 - **Watching:** a phone may set `user_watching: true` in the context of a `recognizer_loop:utterance` when its user is looking at its screen, such as an assistant panel. The hub then doesn't speak the confirmation of a request whose result is on screen (an activity the phone opens: its alarms, an app, the dialer, a drafted text), nor its prompt to confirm an "ask" rule on the phone. Questions, failures and confirmations of background actions are still spoken. A phone that knows the user isn't looking (a hands-free car or headset) sends false. Without the key, or with any value but `true`, the hub speaks as usual. The hub reads the flag from the utterance that triggered the request, not from later answers.
 - **Can't ask, or no requests now:** a phone may set `can_ask: false` in the context of a `recognizer_loop:utterance` when it can't ask its user right now (e.g. locked, hands-free), and `phone_actions: false` when it takes no requests right now. For that utterance the hub treats every `ask` rule as `block` (with `can_ask: false`) or every rule as `block` and no query as enabled (with `phone_actions: false`): it doesn't send what would be refused, so its own skills or other handlers can answer instead. Absent, or any value but `false`, the announced rules apply as they are.
+- **Off for now:** a phone may set `waggle_off` in the context of a `recognizer_loop:utterance` to a list of query and command names it won't run for that utterance, such as `["phone.status"]` where its user turned a query off for the phone's current situation. For that utterance the hub treats those queries as not enabled and those commands as not announced, so it doesn't send them. Absent, or anything but a list of strings, nothing extra is off.
 - **Routing:** the hub sends requests as replies to the message that triggered them (`Message.reply`), so HiveMind delivers them to the right peer. Responses come back as new messages from the phone.
 
 ## Error codes
@@ -61,9 +64,13 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
     {"action": "android.intent.action.SHOW_ALARMS", "mode": "run"},
     {"action": "android.intent.action.MAIN", "category": "android.intent.category.LAUNCHER", "mode": "run"},
     {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
-    {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"}
+    {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"},
+    {"action": "android.intent.action.VIEW", "scheme": "geo", "mode": "run"},
+    {"action": "waggle.torch.set", "mode": "run"},
+    {"action": "waggle.ringer.set", "mode": "run"}
   ],
-  "queries": ["calendar.next", "contacts.lookup", "apps.list"]
+  "queries": ["calendar.next", "contacts.lookup", "apps.list", "phone.status"],
+  "commands": ["waggle.torch.set", "waggle.volume.set", "waggle.ringer.set", "waggle.dnd.set"]
 }}
 ```
 
@@ -72,12 +79,13 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 - `unmatched` is `block` or `ask`: what the phone does with an intent no rule matches. Defaults to `block` if absent. `ask` lets a hub use new actions before the phone has rules for them, at the cost of a confirmation each time.
 - `rules` lists every rule, including `block` rules, so the hub can predict the phone's decision. The hub's prediction is advisory; the phone's decision is final.
 - `queries` lists only the queries that are enabled.
+- `commands` (optional) lists the commands the phone runs and has the Android access for right now. Rules decide whether each one runs (see "Rule matching"). A hub sends no command that isn't listed; absent means none.
 
 ### Rule matching
 
 The phone and the hub's pre-check both evaluate rules this way:
 
-1. A rule has an `action` (required) and optionally a `scheme` (the data URI's scheme), a `package` and a `category`. A rule matches an intent when every field the rule sets equals the intent's value. A rule's `category` matches if it appears in the intent's `categories`. Schemes compare case-insensitively, as in RFC 3986, here and in the forbidden-scheme check.
+1. A rule has an `action` (required) and optionally a `scheme` (the data URI's scheme), a `package` and a `category`. A rule matches an intent when every field the rule sets equals the intent's value. A command is judged as the intent whose `action` is the command's name and whose `categories` hold its variant, if it has one (see "`waggle.command`"). A rule's `category` matches if it appears in the intent's `categories`. Schemes compare case-insensitively, as in RFC 3986, here and in the forbidden-scheme check.
 2. Of the matching rules, the one with the most fields set wins. On a tie, the stricter mode wins: `block` over `ask` over `run`.
 3. If no rule matches, the phone's `unmatched` mode applies.
 4. A phone that can't ask its user right now answers an intent whose decision is `ask` with `cannot_ask`, and says so with `can_ask: false` in the utterance's context (see "Common rules").
@@ -147,6 +155,18 @@ Params: `name` (required), `limit` (default 5). The phone does the name matching
 
 `type` is one of `cell`, `home`, `work` or `other`, mapped from Android's phone types.
 
+### `phone.status`
+
+No params. Every part is optional; a phone leaves out what it can't read.
+
+```json
+{"battery": {"percent": 80, "charging": true, "source": "usb"},
+ "network": {"type": "wifi", "metered": false},
+ "ringer": "normal", "dnd": false}
+```
+
+`source` is what the phone is plugged into: `ac`, `usb`, `wireless`, `other` (a dock, say) or `none`. `network.type` is `wifi`, `cellular` or `none`. `ringer` is `normal`, `vibrate` or `silent`, and `dnd` whether Do Not Disturb is on. A hub reads a value it doesn't know as unknown, except that any `source` but `none` means plugged in.
+
 ### `apps.list`
 
 Params: `name` (optional filter matched against app labels), `limit` (default 20). Only apps with a launcher activity are listed.
@@ -155,6 +175,28 @@ Params: `name` (optional filter matched against app labels), `limit` (default 20
 {"apps": [{"label": "Camera", "package": "app.grapheneos.camera"}]}
 ```
 
+## `waggle.command`
+
+```json
+{"type": "waggle.command", "data": {
+  "id": "9b2d...", "name": "waggle.ringer.set", "params": {"mode": "vibrate"},
+  "description": "Set the ringer to vibrate"
+}}
+```
+
+A command is something the phone does itself rather than through another app, such as switching its flashlight. Commands are a fixed set; each defines its params, its variant and the `data` of a successful response. `description` is optional, as for intents. The phone runs only commands it lists in `commands`, and answers `blocked` to a listed command whose access it has lost since announcing (for example, the user revoked Do Not Disturb access).
+
+**Rules.** The phone and the hub judge a command with the same rules as intents, as the intent whose `action` is the command's name and whose `categories` hold the command's variant (none if it has none). So `{"action": "waggle.ringer.set", "category": "silent", "mode": "ask"}` asks before silencing the phone while a plain `waggle.ringer.set` rule decides the other modes. Command names all start with `waggle.`, and a phone answers `bad_request` to a `waggle.intent` whose action starts with `waggle.`, so no intent can borrow a command's rule.
+
+| Command | Params | Variant | `data` |
+| --- | --- | --- | --- |
+| `waggle.torch.set` | `on` (bool, required) | none | none |
+| `waggle.volume.set` | `stream`: `media` (default), `ring`, `alarm` or `call`; exactly one of `level` (0–100, percent) and `step` (`up` or `down`, one step of the phone's own) | none | `{"stream", "level"}`: the new level, in percent (optional) |
+| `waggle.ringer.set` | `mode`: `normal`, `vibrate` or `silent` (required) | the mode | none |
+| `waggle.dnd.set` | `on` (bool, required). On is Android's "priority only" filter; off lets everything through | `on` or `off` | none |
+
+A successful response means the phone made the change.
+
 ## Versioning
 
-The version is a single integer, announced in `waggle.capabilities`. Adding optional fields, queries, extra types or error codes doesn't change it. Removing or changing the meaning of anything does. A hub must not send requests to a phone that announced a version it doesn't support.
+The version is a single integer, announced in `waggle.capabilities`. Adding optional fields, queries, commands, extra types or error codes doesn't change it. Removing or changing the meaning of anything does. A hub must not send requests to a phone that announced a version it doesn't support.

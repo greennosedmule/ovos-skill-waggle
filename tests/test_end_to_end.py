@@ -287,3 +287,22 @@ def test_named_alarm_asks_its_time_through_converse(bus, recorder, service, make
     assert extras == {"android.intent.extra.alarm.SEARCH_MODE": "android.time",
                       "android.intent.extra.alarm.HOUR": 6,
                       "android.intent.extra.alarm.MINUTES": 30}
+
+
+def test_flashlight_from_the_phone(bus, recorder, service, make_phone):
+    """A settings request becomes a waggle.command to the phone, and ends the turn."""
+    phone = make_phone()
+    recorder.clear()
+    say(bus, "turn on the flashlight", PEER)
+    assert [e.request.data["name"] for e in phone.log] == ["waggle.torch.set"]
+    assert phone.torch is True
+    assert [m.data["utterance"] for m in recorder.of("speak")] == ["Flashlight on."]
+    handled = recorder.of(HANDLED)
+    assert len(handled) == 1 and handled[0].context["destination"] == PEER
+
+
+def test_flashlight_from_another_satellite_falls_through(bus, recorder, service, make_phone):
+    phone = make_phone()
+    recorder.clear()
+    say(bus, "turn on the flashlight", OTHER_PEER)
+    assert phone.log == [] and phone.torch is False

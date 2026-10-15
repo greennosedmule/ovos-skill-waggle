@@ -47,7 +47,8 @@ from ovos_skill_waggle.handlers import ON_SCREEN
 from ovos_skill_waggle.pipeline import WagglePipeline, find_phone
 from ovos_skill_waggle.requests import (
     ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    MESSAGE_COMPOSE, REQUEST, TIMER_SET, TIMERS_STOP, UNREACHABLE, RequestResponse, WaggleRequest,
+    DND_SET, MESSAGE_COMPOSE, NAVIGATE_TO, PHONE_STATUS, REQUEST, RINGER_SET, TIMER_SET,
+    TIMERS_STOP, TORCH_SET, UNREACHABLE, VOLUME_SET, RequestResponse, WaggleRequest,
 )
 
 TOOLBOX_ID = "ovos-waggle-tools"
@@ -118,6 +119,36 @@ class SnoozeArgs(ToolArguments):
                                                "Clock apps use their own default instead.")
 
 
+class NavigateArgs(ToolArguments):
+    destination: str = Field(..., min_length=1,
+                             description="Where to, as the user said it: an address, a place "
+                                         "or a kind of place.")
+
+
+class StatusArgs(ToolArguments):
+    about: Optional[Literal["battery", "network", "sound", "all"]] = Field(
+        None, description="What to report: battery (level, charging), network (Wi-Fi, mobile "
+                          "data), sound (ringer mode, Do Not Disturb), or all (default).")
+
+
+class OnOffArgs(ToolArguments):
+    on: bool = Field(..., description="True to turn it on, false to turn it off.")
+
+
+class VolumeArgs(ToolArguments):
+    model_config = ConfigDict(extra="forbid")
+
+    stream: Optional[Literal["media", "ring", "alarm", "call"]] = Field(
+        None, description="Which volume (default media: music, videos and the assistant's "
+                          "voice).")
+    level: Optional[int] = Field(None, ge=0, le=100, description="Set it to this percentage.")
+    step: Optional[Literal["up", "down"]] = Field(None, description="Or move it one step.")
+
+
+class RingerArgs(ToolArguments):
+    mode: Literal["normal", "vibrate", "silent"] = Field(..., description="The ringer mode.")
+
+
 class Outcome(ToolOutput):
     ok: bool = Field(..., description="Whether the phone did it.")
     summary: str = Field(..., description="What happened, in words.")
@@ -173,6 +204,28 @@ TOOLS: Dict[str, Tuple[str, str, type, dict]] = {
                    "snooze length rather than the one given.",
                    SnoozeArgs, {}),
 }
+TOOLS.update({
+    NAVIGATE_TO: ("navigate_to",
+                  "Open the phone's maps app on a destination, for directions. The user "
+                  "starts the route there.",
+                  NavigateArgs, {"destination": "home"}),
+    PHONE_STATUS: ("get_phone_status",
+                   "Read the phone's battery level and charging, its network (Wi-Fi or "
+                   "mobile data), its ringer mode and Do Not Disturb.",
+                   StatusArgs, {}),
+    TORCH_SET: ("set_flashlight", "Turn the phone's flashlight on or off.", OnOffArgs,
+                {"on": True}),
+    VOLUME_SET: ("set_volume",
+                 "Set one of the phone's volumes to a percentage, or move it a step up or "
+                 "down. Give level or step, not both.",
+                 VolumeArgs, {"step": "up"}),
+    RINGER_SET: ("set_ringer", "Set the phone's ringer to normal, vibrate or silent.",
+                 RingerArgs, {"mode": "normal"}),
+    DND_SET: ("set_do_not_disturb",
+              "Turn the phone's Do Not Disturb on (priority only: starred contacts and "
+              "alarms still get through) or off.",
+              OnOffArgs, {"on": True}),
+})
 BAD_DISMISS = "Give dismiss_alarm hour and minute, or all, or nothing for the next alarm."
 
 

@@ -1,15 +1,18 @@
 """A fake Waggle phone, for testing the hub's handlers (see WAGGLE.md).
 
-:class:`FakePhone` listens for ``waggle.intent`` and ``waggle.query`` on a bus
-and answers each request exactly once, deciding with the same rule matcher as
-the hub. What the user would do (accept or decline an ask card, or ignore it)
-and what Android would do (launch, find no handler, refuse) are settings, as
-are the query fixtures: plain dicts in WAGGLE.md's shapes.
+:class:`FakePhone` listens for ``waggle.intent``, ``waggle.query`` and
+``waggle.command`` on a bus and answers each request exactly once, deciding
+with the same rule matcher as the hub. What the user would do (accept or
+decline an ask card, or ignore it) and what Android would do (launch, find no
+handler, refuse) are settings, as are the query fixtures: plain dicts in
+WAGGLE.md's shapes. Commands change the phone's state (``torch``,
+``volumes``, and ``status``'s ringer and DND), which ``phone.status`` reads.
 
 All settings are plain attributes, so a test can change them between requests.
 """
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -20,16 +23,17 @@ from ovos_bus_client.message import Message
 from ovos_utils.log import LOG
 
 from waggle.messages import (
-    APPS_LIST, CALENDAR_NEXT, CAPABILITIES, CONTACTS_LOOKUP, INTENT, INTENT_RESPONSE, QUERY,
-    QUERY_RESPONSE, Capabilities, ErrorCode, Intent, Mode, Query, Response, WaggleError,
-    from_wire_time,
+    APPS_LIST, CALENDAR_NEXT, CAPABILITIES, COMMAND, COMMAND_RESPONSE, CONTACTS_LOOKUP,
+    DND_SET, INTENT, INTENT_RESPONSE, PHONE_STATUS, QUERY, QUERY_RESPONSE, RINGER_SET,
+    TORCH_SET, VOLUME_SET, Capabilities, Command, ErrorCode, Intent, Mode, Query, Response,
+    WaggleError, from_wire_time, is_command_action,
 )
-from waggle.rules import Decision, decide_for, query_enabled
+from waggle.rules import Decision, decide_command, decide_for, query_enabled
 
 DEFAULT_PEER = "fake-phone"
 
 # The WAGGLE.md example, plus the rest of Wiggins' default rules
-# (SHOW_ALARMS, and SENDTO with sms: as well as smsto:).
+# (SHOW_ALARMS, SENDTO with sms: as well as smsto:, VIEW with geo:, and the commands).
 DEFAULT_CAPABILITIES = Capabilities.from_dict({
     "version": 1,
     "client": {"name": "waggle-fake-phone", "version": "1"},
@@ -51,9 +55,22 @@ DEFAULT_CAPABILITIES = Capabilities.from_dict({
         {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
         {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"},
         {"action": "android.intent.action.SENDTO", "scheme": "sms", "mode": "ask"},
+        {"action": "android.intent.action.VIEW", "scheme": "geo", "mode": "run"},
+        {"action": TORCH_SET, "mode": "run"},
+        {"action": VOLUME_SET, "mode": "run"},
+        {"action": RINGER_SET, "mode": "run"},
+        {"action": DND_SET, "mode": "run"},
     ],
-    "queries": [CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST],
+    "queries": [CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS],
+    "commands": [TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET],
 })
+
+# What phone.status reads before any command changes it.
+DEFAULT_STATUS = {"battery": {"percent": 80, "charging": False, "source": "none"},
+                  "network": {"type": "wifi", "metered": False},
+                  "ringer": "normal", "dnd": False}
+# How far one volume step moves, in percent.
+VOLUME_STEP = 10
 
 
 class AskAnswer(str, Enum):
@@ -89,7 +106,8 @@ class FakePhone:
                  events: Optional[list[dict]] = None, contacts: Optional[list[dict]] = None,
                  apps: Optional[list[dict]] = None,
                  permission_denied: Optional[set[str]] = None,
-                 now: Union[datetime, Callable[[], datetime], None] = None):
+                 now: Union[datetime, Callable[[], datetime], None] = None,
+                 status: Optional[dict] = None):
         self.bus = bus
         self.capabilities = capabilities or DEFAULT_CAPABILITIES
         self.peer = peer
@@ -102,14 +120,19 @@ class FakePhone:
         self.events = list(events or [])
         self.contacts = list(contacts or [])
         self.apps = list(apps or [])
+        # Query and command names the phone lacks Android access for.
         self.permission_denied = set(permission_denied or ())
         self.now = now
+        self.status = json.loads(json.dumps(status if status is not None else DEFAULT_STATUS))
+        self.torch = False
+        self.volumes = {"media": 50, "ring": 50, "alarm": 50, "call": 50}
         self.log: list[LogEntry] = []
         self._lock = threading.Lock()
         self._timers: set[threading.Timer] = set()
         self._closed = False
         bus.on(INTENT, self._on_intent)
         bus.on(QUERY, self._on_query)
+        bus.on(COMMAND, self._on_command)
 
     # --- public --------------------------------------------------------------
 
@@ -132,6 +155,7 @@ class FakePhone:
             timer.cancel()
         self.bus.remove(INTENT, self._on_intent)
         self.bus.remove(QUERY, self._on_query)
+        self.bus.remove(COMMAND, self._on_command)
 
     # --- requests ------------------------------------------------------------
 
@@ -152,22 +176,68 @@ class FakePhone:
             self._answer(message, INTENT_RESPONSE, None,
                          Response.failure(_request_id(message), e.code, e.message))
             return
+        if is_command_action(intent.action):
+            self._answer(message, INTENT_RESPONSE, None, Response.failure(
+                intent.id, ErrorCode.BAD_REQUEST, "that action names a command"))
+            return
         decision = decide_for(self.capabilities, intent)
-        delay = 0.0
-        if decision.mode is Mode.BLOCK:
-            why = "a rule blocks it" if decision.rule else "no rule matches"
-            response = Response.failure(intent.id, ErrorCode.BLOCKED, why)
-        elif decision.mode is Mode.ASK and self.ask_answer is AskAnswer.DECLINE:
-            response = Response.failure(intent.id, ErrorCode.DECLINED, "the user declined")
-        elif decision.mode is Mode.ASK and self.ask_answer is AskAnswer.NONE:
-            response = Response.failure(intent.id, ErrorCode.TIMEOUT, "the user didn't answer")
-            delay = self.timeout_delay_s
-        else:
+        response, delay = self._decided(intent.id, decision)
+        if response is None:
             outcome = (self.launch_by_action[intent.action]
                        if intent.action in self.launch_by_action else self.launch)
             response = (Response.success(intent.id) if outcome is None
                         else Response.failure(intent.id, outcome, f"launch outcome: {outcome}"))
         self._answer(message, INTENT_RESPONSE, decision, response, delay)
+
+    def _decided(self, request_id: str, decision: Decision) -> tuple[Optional[Response], float]:
+        """The answer when the rules or the user refuse, and its delay; None to go ahead."""
+        if decision.mode is Mode.BLOCK:
+            why = "a rule blocks it" if decision.rule else "no rule matches"
+            return Response.failure(request_id, ErrorCode.BLOCKED, why), 0.0
+        if decision.mode is Mode.ASK and self.ask_answer is AskAnswer.DECLINE:
+            return Response.failure(request_id, ErrorCode.DECLINED, "the user declined"), 0.0
+        if decision.mode is Mode.ASK and self.ask_answer is AskAnswer.NONE:
+            return (Response.failure(request_id, ErrorCode.TIMEOUT, "the user didn't answer"),
+                    self.timeout_delay_s)
+        return None, 0.0
+
+    def _on_command(self, message: Message) -> None:
+        if not self._for_me(message):
+            return
+        try:
+            command = Command.from_dict(message.data)
+        except WaggleError as e:
+            self._answer(message, COMMAND_RESPONSE, None,
+                         Response.failure(_request_id(message), e.code, e.message))
+            return
+        decision = decide_command(self.capabilities, command)
+        response, delay = self._decided(command.id, decision)
+        if response is None:
+            if command.name in self.permission_denied:
+                response = Response.failure(command.id, ErrorCode.PERMISSION_DENIED,
+                                            f"no access for {command.name}")
+            else:
+                response = Response.success(command.id, self._run_command(command))
+        self._answer(message, COMMAND_RESPONSE, decision, response, delay)
+
+    def _run_command(self, command: Command) -> Optional[dict]:
+        p = command.params
+        if command.name == TORCH_SET:
+            self.torch = p["on"]
+        elif command.name == RINGER_SET:
+            self.status["ringer"] = p["mode"]
+        elif command.name == DND_SET:
+            self.status["dnd"] = p["on"]
+        elif command.name == VOLUME_SET:
+            stream = p.get("stream", "media")
+            if "level" in p:
+                level = p["level"]
+            else:
+                step = VOLUME_STEP if p["step"] == "up" else -VOLUME_STEP
+                level = max(0, min(100, self.volumes[stream] + step))
+            self.volumes[stream] = level
+            return {"level": level}
+        return None
 
     def _on_query(self, message: Message) -> None:
         if not self._for_me(message):
@@ -185,7 +255,7 @@ class FakePhone:
                                         f"no permission for {query.name}")
         else:
             run = {CALENDAR_NEXT: self._calendar_next, CONTACTS_LOOKUP: self._contacts_lookup,
-                   APPS_LIST: self._apps_list}[query.name]
+                   APPS_LIST: self._apps_list, PHONE_STATUS: self._phone_status}[query.name]
             response = Response.success(query.id, run(query.params))
         self._answer(message, QUERY_RESPONSE, None, response)
 
@@ -271,6 +341,9 @@ class FakePhone:
             if any(needle in n.casefold() for n in names):
                 matches.append({k: v for k, v in contact.items() if k != "nickname"})
         return {"contacts": matches[:params.get("limit", 5)]}
+
+    def _phone_status(self, params: dict) -> dict:
+        return json.loads(json.dumps(self.status))
 
     def _apps_list(self, params: dict) -> dict:
         """Apps whose ``label`` contains ``name`` (all of them without one)."""

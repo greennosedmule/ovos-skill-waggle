@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 
 from ovos_bus_client.message import Message
 
-from waggle.messages import ErrorCode, bad_request
+from waggle.messages import ErrorCode, RINGER_MODES, VOLUME_STEPS, VOLUME_STREAMS, bad_request
 from waggle.queries import PHONE_TYPES
 
 REQUEST = "waggle:request"
@@ -30,12 +30,23 @@ MESSAGE_COMPOSE = "message.compose"
 TIMERS_STOP = "timers.stop"
 ALARM_DISMISS = "alarm.dismiss"
 ALARM_SNOOZE = "alarm.snooze"
+NAVIGATE_TO = "navigate.to"
+PHONE_STATUS = "phone.status"
+TORCH_SET = "torch.set"
+VOLUME_SET = "volume.set"
+RINGER_SET = "ringer.set"
+DND_SET = "dnd.set"
 
 REQUEST_NAMES = (ALARM_SET, TIMER_SET, ALARMS_SHOW, CALENDAR_NEXT, APP_OPEN, CONTACT_CALL,
-                 MESSAGE_COMPOSE, TIMERS_STOP, ALARM_DISMISS, ALARM_SNOOZE)
+                 MESSAGE_COMPOSE, TIMERS_STOP, ALARM_DISMISS, ALARM_SNOOZE, NAVIGATE_TO,
+                 PHONE_STATUS, TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
+# The settings requests, each run by one waggle.command.
+SETTINGS_REQUESTS = (TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
 
 # Which alarms alarm.dismiss picks (AlarmClock's search modes).
 DISMISS_MODES = ("time", "next", "label", "all")
+# What phone.status reports on.
+STATUS_PARTS = ("battery", "network", "sound", "all")
 
 # No response from the phone, or the phone isn't connected; not a WAGGLE.md code.
 UNREACHABLE = "unreachable"
@@ -54,6 +65,14 @@ def _is_str(v: Any) -> bool:
 
 def _is_text(v: Any) -> bool:
     return isinstance(v, str) and bool(v.strip())
+
+
+def _is_bool(v: Any) -> bool:
+    return isinstance(v, bool)
+
+
+def _one_of(choices: tuple) -> Callable[[Any], bool]:
+    return lambda v: v in choices
 
 
 def _is_iso_date(v: Any) -> bool:
@@ -88,7 +107,23 @@ _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
                     "minute": (False, _int(0, 59), "an integer 0–59"),
                     "label": (False, _is_text, "a non-empty string")},
     ALARM_SNOOZE: {"minutes": (False, _int(1, 60), "an integer 1–60")},
+    NAVIGATE_TO: {"destination": (True, _is_text, "a non-empty string")},
+    PHONE_STATUS: {"about": (False, _one_of(STATUS_PARTS), "battery, network, sound or all")},
+    TORCH_SET: {"on": (True, _is_bool, "a boolean")},
+    # One of level and step; see _check_volume.
+    VOLUME_SET: {"stream": (False, _one_of(VOLUME_STREAMS), "media, ring, alarm or call"),
+                 "level": (False, _int(0, 100), "an integer 0–100"),
+                 "step": (False, _one_of(VOLUME_STEPS), "up or down")},
+    RINGER_SET: {"mode": (True, _one_of(RINGER_MODES), "normal, vibrate or silent")},
+    DND_SET: {"on": (True, _is_bool, "a boolean")},
 }
+
+
+def _check_volume(params: dict) -> None:
+    """The stream defaults to media; exactly one of level and step."""
+    params.setdefault("stream", "media")
+    if ("level" in params) == ("step" in params):
+        raise bad_request("volume.set needs exactly one of 'level' and 'step'")
 
 
 def _check_dismiss(params: dict) -> None:
@@ -138,6 +173,8 @@ class WaggleRequest:
         object.__setattr__(self, "params", _check_params(self.request, self.params))
         if self.request == ALARM_DISMISS:
             _check_dismiss(self.params)
+        if self.request == VOLUME_SET:
+            _check_volume(self.params)
 
     @classmethod
     def from_dict(cls, d: Any) -> "WaggleRequest":
