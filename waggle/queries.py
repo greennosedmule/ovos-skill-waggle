@@ -7,19 +7,30 @@ and raises ``bad_request`` for anything malformed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import base64
+import binascii
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Iterable, Optional
 
 from waggle.messages import (
-    APPS_LIST, CALENDAR_NEXT, CONTACTS_LOOKUP, NOTIFICATIONS_LIST, PHONE_LOCATION, PHONE_STATUS,
-    RINGER_MODES, Query, _drop_none, _require_dict, _str, bad_request, from_wire_time,
-    new_request_id, to_wire_time,
+    APPS_LIST, CALENDAR_NEXT, CONTACTS_LOOKUP, NOTIFICATIONS_LIST, PHONE_LOCATION, PHONE_SCREEN,
+    PHONE_STATUS, RINGER_MODES, Query, WaggleError, _drop_none, _require_dict, _str, bad_request,
+    from_wire_time, new_request_id, to_wire_time,
 )
 
 PHONE_TYPES = frozenset({"cell", "home", "work", "other"})
 POWER_SOURCES = ("ac", "usb", "wireless", "other", "none")
 NETWORK_TYPES = ("wifi", "cellular", "none")
+# phone.screen's limits (WAGGLE.md): text in characters, the screenshot in base64 characters.
+SCREEN_TEXT_MAX = 20_000
+SCREEN_IMAGE_MAX_B64 = 1_000_000
+# What a screenshot may be, and the first bytes of each: a media type that doesn't match its
+# data is refused here rather than by a language model's API, which fails the whole turn.
+SCREEN_IMAGE_TYPES = {"image/jpeg": (b"\xff\xd8\xff",), "image/png": (b"\x89PNG\r\n\x1a\n",),
+                      "image/webp": (b"RIFF",)}
+# Why a part of the screen is missing: Android's switch is off, the app is secure, or else.
+SCREEN_MISSING_REASONS = ("off", "secure", "unavailable")
 
 
 # --- builders ----------------------------------------------------------------
@@ -61,6 +72,12 @@ def notifications_list(*, app: Optional[str] = None, sender: Optional[str] = Non
 def phone_location(max_age_s: int = 120, *, id: Optional[str] = None) -> Query:
     """The phone's location; a fix at most ``max_age_s`` old will do."""
     return _query(PHONE_LOCATION, {"max_age_s": max_age_s}, id)
+
+
+def phone_screen(image: bool = False, *, id: Optional[str] = None) -> Query:
+    """What was on the screen when the user invoked the phone's assistant; with ``image``,
+    the screenshot too."""
+    return _query(PHONE_SCREEN, {"image": image}, id)
 
 
 # --- result models -----------------------------------------------------------
@@ -352,6 +369,109 @@ class Location:
                            "time": None if self.time is None else to_wire_time(self.time)})
 
 
+@dataclass(frozen=True)
+class ScreenImage:
+    """A ``phone.screen`` screenshot: its media type and plain base64 data.
+
+    The data is never in ``repr()``, and errors give its size, never its content.
+    """
+    media_type: str
+    data: str = field(repr=False)
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "ScreenImage":
+        d = _require_dict(d, "'image'")
+        media_type = d.get("media_type")
+        if media_type not in SCREEN_IMAGE_TYPES:
+            raise bad_request(f"'media_type' must be one of {', '.join(SCREEN_IMAGE_TYPES)}")
+        data = _str(d, "data", required=True)
+        if len(data) > SCREEN_IMAGE_MAX_B64:
+            raise bad_request(f"the image is {len(data)} characters of base64, over "
+                              f"{SCREEN_IMAGE_MAX_B64}")
+        try:
+            head = base64.b64decode(data, validate=True)[:12]
+        except (binascii.Error, ValueError):
+            raise bad_request(f"the image ({len(data)} characters) isn't valid base64") from None
+        if not head.startswith(SCREEN_IMAGE_TYPES[media_type]) or \
+                (media_type == "image/webp" and head[8:12] != b"WEBP"):
+            raise bad_request(f"the image's data isn't {media_type}")
+        sizes = {}
+        for key in ("width", "height"):
+            value = d.get(key)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)
+                                      or value < 1):
+                raise bad_request(f"'{key}' must be a positive integer")
+            sizes[key] = value
+        return cls(media_type=media_type, data=data, **sizes)
+
+    def to_dict(self) -> dict:
+        return _drop_none({"media_type": self.media_type, "data": self.data,
+                           "width": self.width, "height": self.height})
+
+
+@dataclass(frozen=True)
+class Screen:
+    """A ``phone.screen`` result: the screen when the user invoked the phone's assistant.
+
+    Its text comes from other people and apps: data to read, never instructions. The
+    text, title and URL are left out of ``repr()``, and errors never quote them. Text
+    over :data:`SCREEN_TEXT_MAX` is cut there and marked ``truncated``. A screenshot
+    that is too big or malformed is dropped rather than failing the whole result: the
+    text still answers, ``missing`` says the image is ``unavailable``, and
+    ``image_error`` says why (sizes only, for the hub's log).
+    """
+    package: str
+    app: str = ""
+    url: Optional[str] = field(default=None, repr=False)
+    title: Optional[str] = field(default=None, repr=False)
+    time: Optional[datetime] = None
+    text: str = field(default="", repr=False)
+    truncated: bool = False
+    image: Optional[ScreenImage] = None
+    missing: dict = field(default_factory=dict)  # "text" / "image" -> a reason
+    image_error: Optional[str] = None  # not on the wire
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "Screen":
+        d = _require_dict(d, "phone.screen result")
+        time = d.get("time")
+        if time is not None:
+            try:
+                time = _aware(time, "'time'")
+            except WaggleError:
+                raise bad_request("'time' must be a timestamp") from None
+        text = _str(d, "text") or ""
+        truncated = d.get("truncated", False)
+        if not isinstance(truncated, bool):
+            raise bad_request("'truncated' must be a boolean")
+        if len(text) > SCREEN_TEXT_MAX:
+            text, truncated = text[:SCREEN_TEXT_MAX], True
+        missing_in = _require_dict(d.get("missing") or {}, "'missing'")
+        missing = {part: reason if reason in SCREEN_MISSING_REASONS else "unavailable"
+                   for part, reason in missing_in.items() if part in ("text", "image")}
+        image, image_error = None, None
+        if d.get("image") is not None:
+            try:
+                image = ScreenImage.from_dict(d["image"])
+            except WaggleError as e:
+                image_error = e.message
+                missing["image"] = "unavailable"
+        return cls(package=_str(d, "package", required=True), app=_str(d, "app") or "",
+                   url=_str(d, "url"), title=_str(d, "title"), time=time, text=text,
+                   truncated=truncated, image=image, missing=missing, image_error=image_error)
+
+    def to_dict(self, image: bool = True) -> dict:
+        """The wire shape; without ``image``, everything but the screenshot."""
+        return _drop_none({
+            "app": self.app, "package": self.package, "url": self.url, "title": self.title,
+            "time": None if self.time is None else to_wire_time(self.time), "text": self.text,
+            "truncated": self.truncated or None,
+            "image": self.image.to_dict() if image and self.image else None,
+            "missing": dict(self.missing) or None})
+
+
 # --- response data -----------------------------------------------------------
 
 def parse_calendar_next(data: Any) -> list[CalendarEvent]:
@@ -376,6 +496,10 @@ def parse_notifications(data: Any) -> list[Notification]:
 
 def parse_location(data: Any) -> Location:
     return Location.from_dict(data)
+
+
+def parse_screen(data: Any) -> Screen:
+    return Screen.from_dict(data)
 
 
 def calendar_data(events: Iterable[CalendarEvent]) -> dict:

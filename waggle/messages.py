@@ -65,8 +65,9 @@ APPS_LIST = "apps.list"
 PHONE_STATUS = "phone.status"
 NOTIFICATIONS_LIST = "notifications.list"
 PHONE_LOCATION = "phone.location"
+PHONE_SCREEN = "phone.screen"
 QUERY_NAMES = frozenset({CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS,
-                         NOTIFICATIONS_LIST, PHONE_LOCATION})
+                         NOTIFICATIONS_LIST, PHONE_LOCATION, PHONE_SCREEN})
 
 # Commands (WAGGLE.md "waggle.command"). Their names share the rules' action namespace with
 # Android's intent actions, so they all start with COMMAND_PREFIX, which no intent may use.
@@ -77,7 +78,11 @@ RINGER_SET = "waggle.ringer.set"
 DND_SET = "waggle.dnd.set"
 READ_ALOUD = "waggle.notifications.read_aloud"
 REPLY = "waggle.notification.reply"
-COMMAND_NAMES = frozenset({TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY})
+CLIPBOARD_SET = "waggle.clipboard.set"
+COMMAND_NAMES = frozenset({TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY,
+                           CLIPBOARD_SET})
+# The longest text waggle.clipboard.set takes, in characters.
+CLIPBOARD_MAX_CHARS = 10_000
 VOLUME_STREAMS = ("media", "ring", "alarm", "call")
 VOLUME_STEPS = ("up", "down")
 RINGER_MODES = ("normal", "vibrate", "silent")
@@ -403,6 +408,9 @@ def _validate_params(name: str, params: dict) -> None:
             raise bad_request("param 'since' must be a time, not a date")
     elif name == PHONE_LOCATION:
         _int_param(params, "max_age_s", 120, 0)
+    elif name == PHONE_SCREEN:
+        if not isinstance(params.get("image", False), bool):
+            raise bad_request("param 'image' must be a boolean")
 
 
 def _notification_filters(params: dict, default_limit: int) -> None:
@@ -469,6 +477,10 @@ def _validate_command(name: str, params: dict) -> None:
         if ("ref" in params) == ("to" in params):
             raise bad_request("waggle.notification.reply needs exactly one of 'ref' and 'to'")
         _str(params, "ref" if "ref" in params else "to", required=True)
+    elif name == CLIPBOARD_SET:
+        # The text is the user's: errors name its length, never its content.
+        if len(_str(params, "text", required=True)) > CLIPBOARD_MAX_CHARS:
+            raise bad_request(f"param 'text' is over {CLIPBOARD_MAX_CHARS} characters")
     elif name == VOLUME_SET:
         _choice_param(params, "stream", VOLUME_STREAMS, "media")
         if ("level" in params) == ("step" in params):

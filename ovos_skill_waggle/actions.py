@@ -20,6 +20,12 @@ the phone read them aloud with a command; its ``mode`` says which may be used.
 ``notification.reply`` sends a command, judged before any lookup by a reply
 with no target app. ``location.get`` is a query only.
 
+``screen.get`` is the ``phone.screen`` query only. ``clipboard.set`` sends one
+command, like the settings requests. ``share.text`` is a ``SEND`` intent:
+straight into an app the user named (found with ``apps.list``, as for
+``app.open``), or wherever they pick on the phone. Before the lookup it's
+judged by a ``SEND`` with no package.
+
 ``timers.stop`` sends two intents, ``DISMISS_TIMER`` (a ringing timer) and then
 ``SHOW_TIMERS`` (so the user can cancel a running one: no intent can), and is
 allowed when either is. Dismissing comes first: it shows nothing, while the
@@ -33,15 +39,16 @@ from typing import Callable, Optional
 from waggle import commands, intents
 from waggle.messages import (
     APPS_LIST, CALENDAR_NEXT as Q_CALENDAR_NEXT, CONTACTS_LOOKUP, NOTIFICATIONS_LIST,
-    PHONE_LOCATION, PHONE_STATUS as Q_PHONE_STATUS, Capabilities, Command, Intent,
+    PHONE_LOCATION, PHONE_SCREEN, PHONE_STATUS as Q_PHONE_STATUS, Capabilities, Command, Intent,
     new_request_id,
 )
 from waggle.rules import decide_command, decide_for, query_enabled
 
 from ovos_skill_waggle.requests import (
-    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CONTACT_CALL,
-    DND_SET, LOCATION_GET, MESSAGE_COMPOSE, NAVIGATE_TO, NOTIFICATION_REPLY, NOTIFICATIONS_GET,
-    PHONE_STATUS, RINGER_SET, TIMER_SET, TIMERS_STOP, TORCH_SET, VOLUME_SET, WaggleRequest,
+    ALARM_DISMISS, ALARM_SET, ALARM_SNOOZE, ALARMS_SHOW, APP_OPEN, CALENDAR_NEXT, CLIPBOARD_SET,
+    CONTACT_CALL, DND_SET, LOCATION_GET, MESSAGE_COMPOSE, NAVIGATE_TO, NOTIFICATION_REPLY,
+    NOTIFICATIONS_GET, PHONE_STATUS, RINGER_SET, SCREEN_GET, SHARE_TEXT, TIMER_SET, TIMERS_STOP,
+    TORCH_SET, VOLUME_SET, WaggleRequest,
 )
 from ovos_skill_waggle.settings import Settings
 
@@ -102,12 +109,14 @@ COMMAND_BUILDERS: dict[str, Callable[[WaggleRequest], Command]] = {
     VOLUME_SET: _volume,
     RINGER_SET: lambda r: commands.ringer(r.params["mode"]),
     DND_SET: lambda r: commands.dnd(r.params["on"]),
+    CLIPBOARD_SET: lambda r: commands.clipboard(r.params["text"]),
 }
 
 # The requests this release runs.
 SUPPORTED_REQUESTS = (frozenset(INTENT_BUILDERS) | frozenset(COMMAND_BUILDERS)
                       | {CALENDAR_NEXT, APP_OPEN, CONTACT_CALL, MESSAGE_COMPOSE, TIMERS_STOP,
-                         PHONE_STATUS, NOTIFICATIONS_GET, NOTIFICATION_REPLY, LOCATION_GET})
+                         PHONE_STATUS, NOTIFICATIONS_GET, NOTIFICATION_REPLY, LOCATION_GET,
+                         SCREEN_GET, SHARE_TEXT})
 
 
 def timers_stop_intents(settings: Settings) -> list[Intent]:
@@ -145,7 +154,7 @@ def can_read_aloud(capabilities: Capabilities, request: WaggleRequest) -> bool:
 
 
 def build_command(request: WaggleRequest) -> Command:
-    """The command for a settings request, with a new request id.
+    """The command for a settings request or ``clipboard.set``, with a new request id.
 
     Raises ``KeyError`` for a request that isn't one.
     """
@@ -178,6 +187,10 @@ def required_query(request: WaggleRequest) -> Optional[str]:
         return Q_PHONE_STATUS
     if request.request == LOCATION_GET:
         return PHONE_LOCATION
+    if request.request == SCREEN_GET:
+        return PHONE_SCREEN
+    if request.request == SHARE_TEXT and "app" in request.params:
+        return APPS_LIST
     if request.request == APP_OPEN:
         return APPS_LIST
     if request.request in (CONTACT_CALL, MESSAGE_COMPOSE):
@@ -202,6 +215,8 @@ def precheck_intent(request: WaggleRequest, settings: Settings) -> Optional[Inte
         return intents.dial("0", package=package)
     if request.request == MESSAGE_COMPOSE:
         return intents.compose_sms("0", "-", package=package)
+    if request.request == SHARE_TEXT:
+        return intents.share_text("-", package=package)
     return None
 
 

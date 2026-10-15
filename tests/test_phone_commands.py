@@ -400,9 +400,10 @@ def toolbox():
 
 def test_older_phone_gets_no_new_tools(toolbox, pipeline, make_phone):
     make_phone(capabilities=older_phone())
-    # Notifications and location are still listed: older_phone drops only 0.10.0's additions.
+    # Notifications, location, the screen and sharing are still listed: older_phone drops
+    # only 0.10.0's additions, and with them every command.
     assert offered(toolbox, persona_query()) == ALL_TOOLS - SETTINGS_TOOLS - {
-        "get_phone_status", "navigate_to", "reply_to_notification"}
+        "get_phone_status", "navigate_to", "reply_to_notification", "copy_to_clipboard"}
 
 
 def test_waggle_off_hides_tools(toolbox, pipeline, make_phone):

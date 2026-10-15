@@ -545,6 +545,13 @@ _REPLY = re.compile(
     rf"(?:(?:,? {_SAYING}|,|:|,? with) (?P<body>.+))?$", re.IGNORECASE)
 
 
+# "Reply to the message", "answer the last text": no one's name, but what's on the screen or
+# the newest notification, which the persona can find.
+_NOT_A_CONVERSATION = re.compile(
+    r"^(?:(?:the|this|that|my|last|latest|newest|new|recent|most recent) )*"
+    r"(?:message|text|chat|conversation|thread|email|e-mail|mail|notification|post|comment|dm)s?$")
+
+
 def _parse_reply(utterance: str) -> Optional[Parsed]:
     """ "Reply to Mom saying I'll be late": a reply in the conversation with Mom."""
     m = _REPLY.match(_as_said(utterance))
@@ -552,7 +559,7 @@ def _parse_reply(utterance: str) -> Optional[Parsed]:
         return None
     name = re.sub(r"'s(?: (?:last|latest))? (?:message|text)$", "", m.group("name").lower())
     name = _clean_name(re.sub(r"[^\w' -]", " ", name))
-    if not name:
+    if not name or _NOT_A_CONVERSATION.match(name):
         return None
     body = m.group("body")
     if body is None or not body.strip():

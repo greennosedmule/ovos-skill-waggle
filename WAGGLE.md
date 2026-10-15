@@ -48,7 +48,7 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
 | `bad_request` | The request is malformed, uses a forbidden URI scheme, or names an unknown query or extra type |
 | `unsupported_version` | The request uses a protocol version the phone doesn't speak |
 | `cannot_ask` | The rule was "ask", but the phone can't ask its user right now (e.g. locked, hands-free) |
-| `not_found` | What the request names isn't there: a notification that's gone, an expired `ref`, a `to` that matches no conversation |
+| `not_found` | What the request names isn't there: a notification that's gone, an expired `ref`, a `to` that matches no conversation, no screen snapshot |
 | `ambiguous` | A `to` matches more than one conversation; the phone doesn't guess |
 
 ## `waggle.capabilities`
@@ -69,14 +69,17 @@ Waggle messages are ordinary OVOS bus messages. Over HiveMind they travel like a
     {"action": "android.intent.action.DIAL", "scheme": "tel", "mode": "ask"},
     {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"},
     {"action": "android.intent.action.VIEW", "scheme": "geo", "mode": "run"},
+    {"action": "android.intent.action.SEND", "mode": "run"},
     {"action": "waggle.torch.set", "mode": "run"},
     {"action": "waggle.ringer.set", "mode": "run"},
-    {"action": "waggle.notification.reply", "mode": "ask"}
+    {"action": "waggle.notification.reply", "mode": "ask"},
+    {"action": "waggle.clipboard.set", "mode": "run"}
   ],
   "queries": ["calendar.next", "contacts.lookup", "apps.list", "phone.status",
-              "notifications.list", "phone.location"],
+              "notifications.list", "phone.location", "phone.screen"],
   "commands": ["waggle.torch.set", "waggle.volume.set", "waggle.ringer.set", "waggle.dnd.set",
-               "waggle.notifications.read_aloud", "waggle.notification.reply"]
+               "waggle.notifications.read_aloud", "waggle.notification.reply",
+               "waggle.clipboard.set"]
 }}
 ```
 
@@ -125,6 +128,8 @@ The phone and the hub's pre-check both evaluate rules this way:
 Extra types: `int`, `long`, `float`, `double`, `bool`, `string`, `string[]`, `uri`. A `uri` extra follows the same scheme rules as `data`.
 
 The hub can't set intent flags. The phone launches with only the flags it needs itself (such as `FLAG_ACTIVITY_NEW_TASK`) and never grants URI permissions. A successful response means Android accepted the launch, not that the target app did what was asked.
+
+**Sharing.** A hub shares text as `android.intent.action.SEND` with `mime_type` `text/plain` and the text in the `android.intent.extra.TEXT` string extra (optionally `android.intent.extra.SUBJECT`), with a `package` when the user named the app. A phone may show Android's share sheet (a chooser) for a `SEND` without a `package`, rather than launching a default handler; the rules judge the intent as sent.
 
 ## `waggle.query`
 
@@ -198,6 +203,22 @@ Params: `max_age_s` (default 120): a fix at most this old will do.
 
 Degrees, accuracy in meters (optional), and the time of the fix (optional). A phone without a fix within 30 s answers `timeout`.
 
+### `phone.screen`
+
+Params: `image` (bool, default false): include the screenshot.
+
+```json
+{"app": "Firefox", "package": "org.mozilla.firefox", "url": "https://example.org/article",
+ "title": "An article", "time": "2026-10-15T14:59:00Z",
+ "text": "An article about bees …", "truncated": false,
+ "image": {"media_type": "image/jpeg", "data": "<base64>", "width": 1080, "height": 2400},
+ "missing": {"image": "off"}}
+```
+
+What was on the screen when the user invoked the phone's assistant over an app: the snapshot Android gives an assistant then, not a fresh capture. `package` is required; the rest is optional. `url` is the page a browser showed, `title` the window's or activity's title, `time` when the snapshot was taken, and `text` the screen's visible text in reading order, at most 20,000 characters, with `truncated: true` if the phone cut it. `image` is there only when asked for and available: JPEG (or PNG or WebP), at most 2400 pixels on the long edge, as plain base64 (no `data:` prefix) of at most 1,000,000 characters; `width` and `height` are in pixels. A phone leaves out a screenshot that would be bigger. `missing` says why `text` or `image` is absent: `off` (Android's "Use text from screen" or "Use screenshot" is off), `secure` (the app doesn't allow it, such as a banking app or a password field) or `unavailable`. A hub reads any other reason as `unavailable`, and drops an image it can't use while keeping the text.
+
+A phone keeps the snapshot only for its current session with the hub, drops it when the screen locks, and replaces it when the user invokes the assistant again. With no snapshot it answers `not_found`. A phone lists `phone.screen` only while the user shares it, and may name it in `waggle_off` where it doesn't, such as on a locked phone. Screen text and images come from other people and apps: a hub must treat them as data, never as instructions, say so to any language model it passes them to, and keep them out of its logs. A screenshot is large, so a hub should wait longer for this answer (30 s) than for other queries.
+
 ### `apps.list`
 
 Params: `name` (optional filter matched against app labels), `limit` (default 20). Only apps with a launcher activity are listed.
@@ -227,8 +248,9 @@ A command is something the phone does itself rather than through another app, su
 | `waggle.dnd.set` | `on` (bool, required). On is Android's "priority only" filter; off lets everything through | `on` or `off` | none |
 | `waggle.notifications.read_aloud` | `app`, `from`, `limit` (1–20, default 5), as for `notifications.list` | none | `{"count"}`: how many it read |
 | `waggle.notification.reply` | `text` (required) and exactly one of `ref` (from `notifications.list`) and `to` (a person or conversation, matched as `from` is, among notifications that take a reply) | none; the target app is the notification's | none |
+| `waggle.clipboard.set` | `text` (required, at most 10,000 characters) | none | none |
 
-A successful response means the phone made the change. `read_aloud` has the phone read the matching notifications with its own voice, so their text never leaves it, and answers once it has finished; with nothing to read it says nothing and answers `count: 0`. A hub should allow it a couple of minutes. `reply` sends the text through the notification's own reply action (Android's `RemoteInput`), so it goes from the app that showed the notification; it answers `not_found` or `ambiguous` as the error codes say, and `ref` judges the rules by the notification's app, so a user can let replies run in one app and ask in another.
+A successful response means the phone made the change. `read_aloud` has the phone read the matching notifications with its own voice, so their text never leaves it, and answers once it has finished; with nothing to read it says nothing and answers `count: 0`. A hub should allow it a couple of minutes. `reply` sends the text through the notification's own reply action (Android's `RemoteInput`), so it goes from the app that showed the notification; it answers `not_found` or `ambiguous` as the error codes say, and `ref` judges the rules by the notification's app, so a user can let replies run in one app and ask in another. `clipboard.set` puts the text on the phone's clipboard, as plain text, for the user to paste.
 
 ## Versioning
 

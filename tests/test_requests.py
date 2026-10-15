@@ -20,7 +20,8 @@ def test_names():
                                "app.open", "contact.call", "message.compose", "timers.stop",
                                "alarm.dismiss", "alarm.snooze", "navigate.to", "phone.status",
                                "torch.set", "volume.set", "ringer.set", "dnd.set",
-                               "notifications.get", "notification.reply", "location.get")
+                               "notifications.get", "notification.reply", "location.get",
+                               "screen.get", "clipboard.set", "share.text")
     assert r.UNREACHABLE == "unreachable"
 
 

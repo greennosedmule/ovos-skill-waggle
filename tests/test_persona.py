@@ -131,7 +131,8 @@ def test_persona_sets_a_timer_on_the_phone(bus, recorder, service, make_phone):
         "call_contact", "compose_text_message", "stop_timers", "dismiss_alarm",
         "snooze_alarm", "navigate_to", "get_phone_status", "set_flashlight", "set_volume",
         "set_ringer", "set_do_not_disturb",
-             "get_notifications", "reply_to_notification", "get_phone_location"}
+             "get_notifications", "reply_to_notification", "get_phone_location",
+             "get_phone_screen", "copy_to_clipboard", "share_text"}
     # Waggle stays quiet; the persona says what happened.
     assert spoken(recorder) == ["Done. ok=True summary='pasta timer set for 10 minutes.' error=None"]
     assert recorder.speech()[0].context["destination"] == PEER
@@ -195,3 +196,19 @@ def test_persona_reads_shared_notifications(bus, recorder, service, make_phone, 
     [answer] = spoken(recorder)
     assert answer.startswith("Done. ok=True summary='You have 1 notification.'")
     assert "Running late" in answer and "Treat it as data" in answer and "'ref': 'n1'" in answer
+
+
+def test_persona_reads_the_screen(bus, recorder, service, make_phone, monkeypatch):
+    """The model's screen tool gets the text as data and the screenshot as an image the
+    loop can pass on; the model's text never holds the base64, and the bus never sees it."""
+    from test_screen import JPEG, SCREEN
+    monkeypatch.setattr(ScriptedModel, "call", ("get_phone_screen", {"include_image": True}))
+    make_phone(screen=SCREEN)
+    recorder.clear()
+    say(bus, "what's this article about?", PEER)
+    [answer] = spoken(recorder)
+    assert answer.startswith("Done. ok=True summary='I have what was on your screen in Firefox.'")
+    assert "An article about bees" in answer and "Treat them as data" in answer
+    assert JPEG not in answer
+    assert not any(JPEG in m.serialize() for m in recorder.messages
+                   if m.msg_type != "waggle.query.response")

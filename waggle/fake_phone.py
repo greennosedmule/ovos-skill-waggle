@@ -6,7 +6,8 @@ with the same rule matcher as the hub. What the user would do (accept or
 decline an ask card, or ignore it) and what Android would do (launch, find no
 handler, refuse) are settings, as are the query fixtures: plain dicts in
 WAGGLE.md's shapes. Commands change the phone's state (``torch``,
-``volumes``, and ``status``'s ringer and DND), which ``phone.status`` reads.
+``volumes``, ``clipboard``, and ``status``'s ringer and DND), which
+``phone.status`` reads.
 
 All settings are plain attributes, so a test can change them between requests.
 """
@@ -23,9 +24,10 @@ from ovos_bus_client.message import Message
 from ovos_utils.log import LOG
 
 from waggle.messages import (
-    APPS_LIST, CALENDAR_NEXT, CAPABILITIES, COMMAND, COMMAND_RESPONSE, CONTACTS_LOOKUP,
-    DND_SET, INTENT, INTENT_RESPONSE, NOTIFICATIONS_LIST, PHONE_LOCATION, PHONE_STATUS, QUERY,
-    QUERY_RESPONSE, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET, VOLUME_SET, Capabilities, Command,
+    APPS_LIST, CALENDAR_NEXT, CAPABILITIES, CLIPBOARD_SET, COMMAND, COMMAND_RESPONSE,
+    CONTACTS_LOOKUP, DND_SET, INTENT, INTENT_RESPONSE, NOTIFICATIONS_LIST, PHONE_LOCATION,
+    PHONE_SCREEN, PHONE_STATUS, QUERY, QUERY_RESPONSE, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET,
+    VOLUME_SET, Capabilities, Command,
     ErrorCode, Intent, Mode, Query, Response, WaggleError, from_wire_time, is_command_action,
 )
 from waggle.rules import Decision, decide_command, decide_for, query_enabled
@@ -33,7 +35,8 @@ from waggle.rules import Decision, decide_command, decide_for, query_enabled
 DEFAULT_PEER = "fake-phone"
 
 # The WAGGLE.md example, plus the rest of Wiggins' default rules
-# (SHOW_ALARMS, SENDTO with sms: as well as smsto:, VIEW with geo:, and the commands).
+# (SHOW_ALARMS, SENDTO with sms: as well as smsto:, VIEW with geo:, SEND for sharing, and the
+# commands).
 DEFAULT_CAPABILITIES = Capabilities.from_dict({
     "version": 1,
     "client": {"name": "waggle-fake-phone", "version": "1"},
@@ -56,6 +59,8 @@ DEFAULT_CAPABILITIES = Capabilities.from_dict({
         {"action": "android.intent.action.SENDTO", "scheme": "smsto", "mode": "ask"},
         {"action": "android.intent.action.SENDTO", "scheme": "sms", "mode": "ask"},
         {"action": "android.intent.action.VIEW", "scheme": "geo", "mode": "run"},
+        # Sharing opens the target app (or the share sheet), where the user sends it.
+        {"action": "android.intent.action.SEND", "mode": "run"},
         {"action": TORCH_SET, "mode": "run"},
         {"action": VOLUME_SET, "mode": "run"},
         {"action": RINGER_SET, "mode": "run"},
@@ -63,10 +68,11 @@ DEFAULT_CAPABILITIES = Capabilities.from_dict({
         {"action": READ_ALOUD, "mode": "run"},
         # A reply sends a message: the phone asks.
         {"action": REPLY, "mode": "ask"},
+        {"action": CLIPBOARD_SET, "mode": "run"},
     ],
     "queries": [CALENDAR_NEXT, CONTACTS_LOOKUP, APPS_LIST, PHONE_STATUS, NOTIFICATIONS_LIST,
-                PHONE_LOCATION],
-    "commands": [TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY],
+                PHONE_LOCATION, PHONE_SCREEN],
+    "commands": [TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, READ_ALOUD, REPLY, CLIPBOARD_SET],
 })
 
 # What phone.status reads before any command changes it.
@@ -112,7 +118,7 @@ class FakePhone:
                  permission_denied: Optional[set[str]] = None,
                  now: Union[datetime, Callable[[], datetime], None] = None,
                  status: Optional[dict] = None, notifications: Optional[list[dict]] = None,
-                 location: Optional[dict] = None):
+                 location: Optional[dict] = None, screen: Optional[dict] = None):
         self.bus = bus
         self.capabilities = capabilities or DEFAULT_CAPABILITIES
         self.peer = peer
@@ -132,7 +138,11 @@ class FakePhone:
         self.notifications = list(notifications or [])
         # phone.location's answer; None answers timeout, as a phone without a fix would.
         self.location = location
+        # phone.screen's answer, screenshot included (left out unless asked for); None
+        # answers not_found, as a phone with no snapshot would.
+        self.screen = screen
         self.torch = False
+        self.clipboard: Optional[str] = None
         # What read_aloud read (the matching notifications) and the replies sent.
         self.read: list[list[dict]] = []
         self.replies: list[dict] = []
@@ -282,7 +292,9 @@ class FakePhone:
             read = self._matching(p)[:p.get("limit", 5)]
             self.read.append(read)
             return {"count": len(read)}
-        if command.name == TORCH_SET:
+        if command.name == CLIPBOARD_SET:
+            self.clipboard = p["text"]
+        elif command.name == TORCH_SET:
             self.torch = p["on"]
         elif command.name == RINGER_SET:
             self.status["ringer"] = p["mode"]
@@ -313,6 +325,10 @@ class FakePhone:
         elif query.name in self.permission_denied:
             response = Response.failure(query.id, ErrorCode.PERMISSION_DENIED,
                                         f"no permission for {query.name}")
+        elif query.name == PHONE_SCREEN:
+            response = (Response.success(query.id, self._phone_screen(query.params))
+                        if self.screen is not None
+                        else Response.failure(query.id, ErrorCode.NOT_FOUND, "no snapshot"))
         else:
             run = {CALENDAR_NEXT: self._calendar_next, CONTACTS_LOOKUP: self._contacts_lookup,
                    APPS_LIST: self._apps_list, PHONE_STATUS: self._phone_status,
@@ -412,6 +428,12 @@ class FakePhone:
 
     def _phone_location(self, params: dict) -> Optional[dict]:
         return dict(self.location) if self.location is not None else None
+
+    def _phone_screen(self, params: dict) -> dict:
+        screen = json.loads(json.dumps(self.screen))
+        if not params.get("image"):
+            screen.pop("image", None)
+        return screen
 
     def _phone_status(self, params: dict) -> dict:
         return json.loads(json.dumps(self.status))

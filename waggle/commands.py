@@ -10,9 +10,12 @@ from __future__ import annotations
 from typing import Optional
 
 from waggle.messages import (
-    DND_SET, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET, VOLUME_SET, Command, _drop_none,
-    new_request_id,
+    CLIPBOARD_SET, DND_SET, READ_ALOUD, REPLY, RINGER_SET, TORCH_SET, VOLUME_SET, Command,
+    _drop_none, new_request_id,
 )
+
+# How much of a text a description quotes.
+SNIPPET_CHARS = 60
 
 
 def _command(name: str, params: dict, description: str, id: Optional[str]) -> Command:
@@ -65,3 +68,14 @@ def reply(text: str, *, ref: Optional[str] = None, to: Optional[str] = None,
     who = name or to or "the conversation"
     return _command(REPLY, _drop_none({"ref": ref, "to": to, "text": text}),
                     f'Reply to {who}: "{text}"', id)
+
+
+def snippet(text: str) -> str:
+    """The start of ``text`` on one line, for a description the phone shows."""
+    text = " ".join(text.split())
+    return text if len(text) <= SNIPPET_CHARS else text[:SNIPPET_CHARS - 1].rstrip() + "…"
+
+
+def clipboard(text: str, *, id: Optional[str] = None) -> Command:
+    """Put ``text`` on the phone's clipboard."""
+    return _command(CLIPBOARD_SET, {"text": text}, f'Copy "{snippet(text)}" to the clipboard', id)

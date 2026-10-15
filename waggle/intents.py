@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from urllib.parse import quote
 
+from waggle.commands import snippet
 from waggle.messages import Extra, Intent, new_request_id
 
 # android.content.Intent
@@ -18,7 +19,11 @@ ACTION_MAIN = "android.intent.action.MAIN"
 ACTION_DIAL = "android.intent.action.DIAL"
 ACTION_SENDTO = "android.intent.action.SENDTO"
 ACTION_VIEW = "android.intent.action.VIEW"
+ACTION_SEND = "android.intent.action.SEND"
 CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER"
+EXTRA_TEXT = "android.intent.extra.TEXT"
+EXTRA_SUBJECT = "android.intent.extra.SUBJECT"
+MIME_TEXT = "text/plain"
 
 # android.provider.AlarmClock
 ACTION_SET_ALARM = "android.intent.action.SET_ALARM"
@@ -238,3 +243,16 @@ def navigate(destination: str, *, package: Optional[str] = None,
     destination = _text(destination, "destination").strip()
     return _intent(ACTION_VIEW, f"Directions to {destination}", id, package,
                    data=f"{SCHEME_GEO}:0,0?q={quote(destination, safe='')}")
+
+
+def share_text(text: str, *, subject: Optional[str] = None, package: Optional[str] = None,
+               label: Optional[str] = None, id: Optional[str] = None) -> Intent:
+    """``SEND`` of plain text: into ``package``, or, without one, wherever the user picks
+    (a phone may show Android's share sheet). The user finishes and sends it there."""
+    text = _text(text, "text")
+    extras = {EXTRA_TEXT: Extra("string", text)}
+    if subject is not None:
+        extras[EXTRA_SUBJECT] = Extra("string", _text(subject, "subject"))
+    where = f" with {_optional_text(label, 'label')}" if label else ""
+    return _intent(ACTION_SEND, f'Share "{snippet(text)}"{where}', id, package,
+                   mime_type=MIME_TEXT, extras=extras)

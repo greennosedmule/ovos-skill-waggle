@@ -14,7 +14,9 @@ from typing import Any, Callable, Optional
 
 from ovos_bus_client.message import Message
 
-from waggle.messages import ErrorCode, RINGER_MODES, VOLUME_STEPS, VOLUME_STREAMS, bad_request
+from waggle.messages import (
+    CLIPBOARD_MAX_CHARS, ErrorCode, RINGER_MODES, VOLUME_STEPS, VOLUME_STREAMS, bad_request,
+)
 from waggle.queries import PHONE_TYPES
 
 REQUEST = "waggle:request"
@@ -39,11 +41,14 @@ DND_SET = "dnd.set"
 NOTIFICATIONS_GET = "notifications.get"
 NOTIFICATION_REPLY = "notification.reply"
 LOCATION_GET = "location.get"
+SCREEN_GET = "screen.get"
+CLIPBOARD_SET = "clipboard.set"
+SHARE_TEXT = "share.text"
 
 REQUEST_NAMES = (ALARM_SET, TIMER_SET, ALARMS_SHOW, CALENDAR_NEXT, APP_OPEN, CONTACT_CALL,
                  MESSAGE_COMPOSE, TIMERS_STOP, ALARM_DISMISS, ALARM_SNOOZE, NAVIGATE_TO,
                  PHONE_STATUS, TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET, NOTIFICATIONS_GET,
-                 NOTIFICATION_REPLY, LOCATION_GET)
+                 NOTIFICATION_REPLY, LOCATION_GET, SCREEN_GET, CLIPBOARD_SET, SHARE_TEXT)
 # The settings requests, each run by one waggle.command.
 SETTINGS_REQUESTS = (TORCH_SET, VOLUME_SET, RINGER_SET, DND_SET)
 
@@ -132,7 +137,20 @@ _PARAMS: dict[str, dict[str, tuple[bool, Callable[[Any], bool], str]]] = {
                          "ref": (False, _is_text, "a non-empty string"),
                          "body": (True, _is_text, "a non-empty string")},
     LOCATION_GET: {},
+    SCREEN_GET: {"image": (False, _is_bool, "a boolean")},
+    # The text's length is checked in _check_text, whose error doesn't quote it.
+    CLIPBOARD_SET: {"text": (True, _is_text, "a non-empty string")},
+    SHARE_TEXT: {"text": (True, _is_text, "a non-empty string"),
+                 "app": (False, _is_text, "a non-empty string"),
+                 "subject": (False, _is_text, "a non-empty string")},
 }
+# The longest text clipboard.set and share.text take, in characters.
+TEXT_MAX_CHARS = CLIPBOARD_MAX_CHARS
+
+
+def _check_text(request: str, params: dict) -> None:
+    if len(params["text"]) > TEXT_MAX_CHARS:
+        raise bad_request(f"{request} param 'text' is over {TEXT_MAX_CHARS} characters")
 
 
 def _check_reply(params: dict) -> None:
@@ -200,6 +218,8 @@ class WaggleRequest:
             _check_reply(self.params)
         if self.request == NOTIFICATIONS_GET:
             self.params.setdefault("mode", "any")
+        if self.request in (CLIPBOARD_SET, SHARE_TEXT):
+            _check_text(self.request, self.params)
 
     @classmethod
     def from_dict(cls, d: Any) -> "WaggleRequest":
@@ -222,11 +242,15 @@ class RequestResponse:
     ``error`` is set iff ``ok`` is false: a WAGGLE.md error code or
     :data:`UNREACHABLE`, stored as its string value. ``summary`` says what
     happened in words.
+
+    ``image`` is a screenshot (``media_type`` and base64 ``data``) for an in-process
+    caller, the persona's tool. It is never in :meth:`to_dict`, so never on the bus.
     """
     ok: bool
     summary: str
     error: Optional[str] = None
     data: Optional[dict] = None  # what was read, for a caller that isn't speaking it
+    image: Optional[dict] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         if not isinstance(self.ok, bool):
@@ -244,8 +268,9 @@ class RequestResponse:
             object.__setattr__(self, "error", error)
 
     @classmethod
-    def success(cls, summary: str, data: Optional[dict] = None) -> "RequestResponse":
-        return cls(ok=True, summary=summary, data=data)
+    def success(cls, summary: str, data: Optional[dict] = None,
+                image: Optional[dict] = None) -> "RequestResponse":
+        return cls(ok=True, summary=summary, data=data, image=image)
 
     @classmethod
     def failure(cls, error: ErrorCode | str, summary: str) -> "RequestResponse":

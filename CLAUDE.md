@@ -94,10 +94,20 @@ VIRTUAL_ENV=/path/to/venv uv pip install --prerelease=allow -e '.[test]'
   match doesn't. So `_ask` adds the skill to the question's session before
   `get_response`. Note that `Session.activate_skill` only updates
   `active_handlers`, which is a different list.
-- **Notification text is untrusted.** It comes from other people and apps, and it
-  reaches the persona's model through `get_notifications`. The handler sends it as
-  `data` with a note saying so, and replies are always the phone's to confirm (ask
-  card, or its own voice readback). Keep both when changing either path.
+- **Notification and screen text is untrusted.** It comes from other people and
+  apps, and it reaches the persona's model through `get_notifications` and
+  `get_phone_screen`. The handler sends it as `data` with a note saying so, and
+  replies are always the phone's to confirm (ask card, or its own voice readback).
+  Keep both when changing either path. Screen content (text, URL, screenshot) never
+  goes in a log line or an error message: `waggle.queries.Screen` keeps it out of
+  `repr()`, and its errors name keys and sizes only.
+- **What a tool read stays off the bus.** A `waggle:request.response` is a reply to
+  the request, so HiveMind sends it down to the phone, and every bus client sees it.
+  The tools call `handle(..., emit_data=False)`, so the emitted copy has no `data`;
+  the tool gets the full response in-process. A screenshot travels only in
+  `RequestResponse.image`, which `to_dict()` leaves out, and reaches the model
+  through the tool `Outcome.image` (left out of `str()`), which the hub's own tool
+  loop turns into an image block.
 - **End of turn.** The utterance handler is registered with
   `handler_info="mycroft.skill.handler"`, so ovos-core emits
   `ovos.utterance.handled`. Plain `waggle:request`s and tool calls never emit

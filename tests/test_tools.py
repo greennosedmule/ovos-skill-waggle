@@ -17,7 +17,8 @@ ALL_TOOLS = {"set_alarm", "set_timer", "show_alarms", "get_calendar_events", "op
              "call_contact", "compose_text_message", "stop_timers", "dismiss_alarm",
              "snooze_alarm", "navigate_to", "get_phone_status", "set_flashlight", "set_volume",
              "set_ringer", "set_do_not_disturb",
-             "get_notifications", "reply_to_notification", "get_phone_location"}
+             "get_notifications", "reply_to_notification", "get_phone_location",
+             "get_phone_screen", "copy_to_clipboard", "share_text"}
 SAM_LEE = {"fn": "Sam Lee", "tel": [{"value": "+15550003333", "type": "cell"}]}
 SAM_ORTIZ = {"fn": "Sam Ortiz", "tel": [{"value": "+15550004444", "type": "work"}]}
 
